@@ -8,6 +8,7 @@ from django.db import models
 
 from dennis.translator import Translator
 from statsd import statsd
+import waffle
 
 from .gengo_utils import (
     FjordGengo,
@@ -18,6 +19,7 @@ from .gengo_utils import (
 )
 from .utils import locale_equals_language
 from fjord.base.models import ModelBase
+from fjord.base.utils import instance_to_key, wrap_with_paragraphs
 from fjord.journal.models import Record
 from fjord.journal.utils import j_error, j_info
 
@@ -34,6 +36,13 @@ class SuperModel(models.Model):
     locale = models.CharField(max_length=5)
     desc = models.CharField(blank=True, default=u'', max_length=100)
     trans_desc = models.CharField(blank=True, default=u'', max_length=100)
+
+    def generate_translation_jobs(self, system=None):
+        """This always returns a fake translation job"""
+        return [
+            (instance_to_key(self), u'fake', self.locale, u'desc',
+             u'en', u'trans_desc')
+        ]
 
 
 _translation_systems = {}
@@ -89,6 +98,9 @@ class TranslationSystem(object):
     # Whether or not this system uses push and pull translations
     use_push_and_pull = False
 
+    # Whether or not this system has daily activities
+    use_daily = False
+
     def translate(self, instance, src_lang, src_field, dst_lang, dst_field):
         """Implement this to translation fields on an instance
 
@@ -117,6 +129,19 @@ class TranslationSystem(object):
 
         This is for asynchronous systems that take a batch of translations,
         perform some work, and then return results some time later.
+
+        Print any status text to stdout.
+
+        """
+        raise NotImplementedError()
+
+    def run_daily_activities(self):
+        """Implement this to do any work that needs to happen once per day
+
+        Examples:
+
+        1. sending out daily reminders
+        2. sending out a warning about low balance
 
         Print any status text to stdout.
 
@@ -177,7 +202,6 @@ class DennisTranslator(TranslationSystem):
             translated = Translator([], pipeline).translate_string(text)
             setattr(instance, dst_field, translated)
             instance.save()
-            self.log_info(instance=instance, action='translate', msg='success')
 
 
 # ---------------------------------------------------------
@@ -189,6 +213,11 @@ class GengoMachineTranslator(TranslationSystem):
     name = 'gengo_machine'
 
     def translate(self, instance, src_lang, src_field, dst_lang, dst_field):
+        # If gengosystem is disabled, we just return immediately. We
+        # can backfill later.
+        if not waffle.switch_is_active('gengosystem'):
+            return
+
         text = getattr(instance, src_field)
         metadata = {
             'locale': instance.locale,
@@ -297,7 +326,7 @@ class GengoJob(ModelBase):
     order = models.ForeignKey('translations.GengoOrder', null=True)
 
     # When this job instance was created
-    created = models.DateTimeField(default=datetime.now())
+    created = models.DateTimeField(default=datetime.now)
 
     # When this job instance was completed
     completed = models.DateTimeField(blank=True, null=True)
@@ -373,7 +402,7 @@ class GengoOrder(ModelBase):
 
     # When this instance was created which should also line up with
     # the time the order was submitted to Gengo
-    created = models.DateTimeField(default=datetime.now())
+    created = models.DateTimeField(default=datetime.now)
 
     # When this order was completed
     completed = models.DateTimeField(blank=True, null=True)
@@ -423,8 +452,14 @@ class GengoHumanTranslator(TranslationSystem):
     """
     name = 'gengo_human'
     use_push_and_pull = True
+    use_daily = True
 
     def translate(self, instance, src_lang, src_field, dst_lang, dst_field):
+        # If gengosystem is disabled, we just return immediately. We
+        # can backfill later.
+        if not waffle.switch_is_active('gengosystem'):
+            return
+
         text = getattr(instance, src_field)
         metadata = {
             'locale': instance.locale,
@@ -506,24 +541,32 @@ class GengoHumanTranslator(TranslationSystem):
         exception and everything will be ok data-consistency-wise.
 
         """
+        # FIXME: This should email a different group than admin,
+        # but I'm (ab)using the admin group for now because I know
+        # they're set up right.
         if balance < threshold:
-            # FIXME: This should email a different group than admin,
-            # but I'm (ab)using the admin group for now because I know
-            # they're set up right.
             mail_admins(
                 subject='Gengo account balance {0} < {1}'.format(
                     balance, threshold),
-                message=(
-                    'Dagnabit! Send more money or the translations get it!\n\n'
-                    'Don\'t try no funny business, neither!\n\n'
-                    'Love,\n\n'
-                    'Gengo'
+                message=wrap_with_paragraphs(
+                    'Dagnabit! Send more money or the translations get it! '
+                    'Don\'t try no funny business, neither!'
+                    '\n\n'
+                    'Love,'
+                    '\n\n'
+                    'Fjord McGengo'
                 )
             )
             return False
+
         return True
 
     def push_translations(self):
+        # If gengosystem is disabled, we just return immediately. We
+        # can backfill later.
+        if not waffle.switch_is_active('gengosystem'):
+            return
+
         gengo_api = FjordGengo()
 
         if not gengo_api.is_configured():
@@ -586,6 +629,11 @@ class GengoHumanTranslator(TranslationSystem):
                 return
 
     def pull_translations(self):
+        # If gengosystem is disabled, we just return immediately. We
+        # can backfill later.
+        if not waffle.switch_is_active('gengosystem'):
+            return
+
         gengo_api = FjordGengo()
 
         if not gengo_api.is_configured():
@@ -622,9 +670,40 @@ class GengoHumanTranslator(TranslationSystem):
 
             # Check to see if there are still outstanding jobs for
             # this order. If there aren't, close the order out.
-            outstanding = (GengoJob.uncached
+            outstanding = (GengoJob.objects
                            .filter(order=order, status=STATUS_IN_PROGRESS)
                            .count())
 
             if outstanding == 0:
                 order.mark_complete()
+
+    def run_daily_activities(self):
+        # If gengosystem is disabled, we don't want to do anything.
+        if not waffle.switch_is_active('gengosystem'):
+            return
+
+        gengo_api = FjordGengo()
+
+        if not gengo_api.is_configured():
+            # If Gengo isn't configured, then we drop out here rather
+            # than raise a GengoConfig error.
+            return
+
+        balance = gengo_api.get_balance()
+        threshold = settings.GENGO_ACCOUNT_BALANCE_THRESHOLD
+
+        if threshold < balance < (2 * threshold):
+            mail_admins(
+                subject='Warning: Gengo account balance {0} < {1}'.format(
+                    balance, 2 * threshold),
+                message=wrap_with_paragraphs(
+                    'Dear mom,'
+                    '\n\n'
+                    'Translations are the fab. Running low on funds. Send '
+                    'more money when you get a chance.'
+                    '\n\n'
+                    'Love,'
+                    '\n\n'
+                    'Fjord McGengo'
+                )
+            )

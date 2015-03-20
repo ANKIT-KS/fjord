@@ -12,10 +12,11 @@ $(function() {
     });
 
     // Datepickers.
-    $('input[type=date]').datepicker({
-        dateFormat: 'yy-mm-dd',
-    });
-
+    if (!fjord.isDateInputSupported()) {
+        $('input[type=date]').datepicker({
+            dateFormat: 'yy-mm-dd',
+        });
+    }
 
     // Set up the when selector.
     var $date_start = $('#whensubmit').siblings('input[name=date_start]');
@@ -55,7 +56,11 @@ $(function() {
             var $li = $(this);
             var value = $li.data('value');
             var bar_width = (value / max_value * 100).toString() + '%';
-            var percent = (value / total * 100).toFixed(0).toString() + '%';
+            var percent = "0%";
+            if (total !== 0) {
+                percent = (value / total * 100).toFixed(0).toString() + '%';
+            }
+
             var $label = $li.children('label');
 
             // Draw bars
@@ -72,6 +77,7 @@ $(function() {
                 } else {
                     params[name] = undefined;
                 }
+                params.page = undefined;
                 fjord.setQuerystring(fjord.getQuerystring(), params);
             });
         });

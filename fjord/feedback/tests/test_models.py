@@ -8,23 +8,26 @@ from fjord.feedback.models import (
     Response,
     ResponseEmail,
     ResponseContext,
+    ResponsePI,
     ResponseMappingType,
     purge_data
 )
 from fjord.feedback.tests import (
     ResponseFactory,
     ResponseEmailFactory,
-    ResponseContextFactory
+    ResponseContextFactory,
+    ResponsePIFactory
 )
 from fjord.feedback.utils import compute_grams
 from fjord.search.tests import ElasticTestCase
-
+from fjord.feedback.config import TRUNCATE_LENGTH
+from fjord.journal.models import Record
 
 class TestResponseModel(TestCase):
     def test_description_truncate_on_save(self):
         # Extra 10 characters get lopped off on save.
-        resp = ResponseFactory(description=('a' * 10010))
-        eq_(resp.description, 'a' * 10000)
+        resp = ResponseFactory(description=('a' * (TRUNCATE_LENGTH + 10)))
+        eq_(resp.description, 'a' * TRUNCATE_LENGTH)
 
     def test_description_strip_on_save(self):
         # Nix leading and trailing whitespace.
@@ -43,6 +46,31 @@ class TestResponseModel(TestCase):
         eq_(resp.url_domain, u'\u30c9\u30e9\u30af\u30a810.jp')
         assert isinstance(resp.url_domain, unicode)
 
+    def test_rating_to_happy(self):
+        """Test that we do populate happy from rating"""
+        data = {
+            1: False,
+            2: False,
+            3: False,
+            4: True,
+            5: True
+        }
+        for rat, expected in data.items():
+            # Create the response, but DON'T save it to the db.
+            resp = ResponseFactory.build(happy=None, rating=rat)
+            resp.save()
+            eq_(resp.happy, expected)
+
+    def test_happy_to_rating(self):
+        """Test we don't populate rating from happy"""
+        resp = ResponseFactory.build(happy=True, rating=None)
+        resp.save()
+        eq_(resp.rating, None)
+
+        resp = ResponseFactory.build(happy=False, rating=None)
+        resp.save()
+        eq_(resp.rating, None)
+
 
 class TestAutoTranslation(TestCase):
     def setUp(self):
@@ -59,7 +87,7 @@ class TestAutoTranslation(TestCase):
         super(TestAutoTranslation, self).tearDown()
 
     def test_auto_translation(self):
-        prod = Product.uncached.get(db_name='firefox')
+        prod = Product.objects.get(db_name='firefox')
         prod.translation_system = u'dennis'
         prod.save()
 
@@ -70,7 +98,7 @@ class TestAutoTranslation(TestCase):
         )
 
         # Fetch it from the db again
-        resp = Response.uncached.get(id=resp.id)
+        resp = Response.objects.get(id=resp.id)
         eq_(resp.translated_description, u'\xabHOLA\xbb')
 
 
@@ -100,7 +128,7 @@ class TestGenerateTranslationJobs(TestCase):
         eq_(len(resp.generate_translation_jobs()), 0)
 
         # Re-fetch from the db and make sure the description was copied over
-        resp = Response.uncached.get(id=resp.id)
+        resp = Response.objects.get(id=resp.id)
         eq_(resp.description, resp.translated_description)
 
     def test_english_gb_no_translation(self):
@@ -115,7 +143,7 @@ class TestGenerateTranslationJobs(TestCase):
         eq_(len(resp.generate_translation_jobs()), 0)
 
         # Re-fetch from the db and make sure the description was copied over
-        resp = Response.uncached.get(id=resp.id)
+        resp = Response.objects.get(id=resp.id)
         eq_(resp.description, resp.translated_description)
 
     def test_english_with_dennis(self):
@@ -130,7 +158,7 @@ class TestGenerateTranslationJobs(TestCase):
         # Set the product up for translation *after* creating the response
         # so that it doesn't get auto-translated because Response is set up
         # for auto-translation.
-        prod = Product.uncached.get(db_name='firefox')
+        prod = Product.objects.get(db_name='firefox')
         prod.translation_system = u'dennis'
         prod.save()
 
@@ -138,7 +166,7 @@ class TestGenerateTranslationJobs(TestCase):
         eq_(len(resp.generate_translation_jobs()), 0)
 
         # Re-fetch from the db and make sure the description was copied over
-        resp = Response.uncached.get(id=resp.id)
+        resp = Response.objects.get(id=resp.id)
         eq_(resp.description, resp.translated_description)
 
     def test_spanish_no_translation(self):
@@ -168,7 +196,7 @@ class TestGenerateTranslationJobs(TestCase):
         # Set the product up for translation *after* creating the response
         # so that it doesn't get auto-translated because Response is set up
         # for auto-translation.
-        prod = Product.uncached.get(db_name='firefox')
+        prod = Product.objects.get(db_name='firefox')
         prod.translation_system = u'dennis'
         prod.save()
 
@@ -200,7 +228,7 @@ class TestGenerateTranslationJobs(TestCase):
         # Set the product up for translation *after* creating the response
         # so that it doesn't get auto-translated because Response is set up
         # for auto-translation.
-        prod = Product.uncached.get(db_name='firefox')
+        prod = Product.objects.get(db_name='firefox')
         prod.translation_system = u'dennis'
         prod.save()
 
@@ -254,7 +282,7 @@ class TestParseData(ElasticTestCase):
         now = datetime.datetime.now()
         cutoff = now - datetime.timedelta(days=5)
 
-        # Create 10 ResponseEmail objs--one for each day for the last
+        # Create 10 objs of each type--one for each day for the last
         # 10 days.
         for i in range(10):
             ResponseEmailFactory(
@@ -263,6 +291,11 @@ class TestParseData(ElasticTestCase):
             ResponseContextFactory(
                 opinion__created=(now - datetime.timedelta(days=i))
             )
+            ResponsePIFactory(
+                opinion__created=(now - datetime.timedelta(days=i))
+            )
+
+        # Note that this creates 30 Response objects.
 
         # Since creating the objects and indexing them happens very
         # quickly in tests, we hit a race condition and the has_email
@@ -271,23 +304,25 @@ class TestParseData(ElasticTestCase):
         self.setup_indexes()
 
         # Make sure everything is in the db
-        eq_(Response.objects.count(), 20)
+        eq_(Response.objects.count(), 30)
         eq_(ResponseEmail.objects.count(), 10)
         eq_(ResponseContext.objects.count(), 10)
+        eq_(ResponsePI.objects.count(), 10)
 
         # Make sure everything is in the index
         resp_s = ResponseMappingType.search()
-        eq_(resp_s.count(), 20)
+        eq_(resp_s.count(), 30)
         eq_(resp_s.filter(has_email=True).count(), 10)
 
         # Now purge everything older than 5 days and make sure things
-        # got removed that should have gotten removed
+        # got removed that should have gotten removed. Also check if
+        # there is a journal entry for the purge operation.
         cutoff = now - datetime.timedelta(days=5)
         purge_data(cutoff=cutoff)
 
         self.refresh()
 
-        eq_(Response.objects.count(), 20)
+        eq_(Response.objects.count(), 30)
         eq_(ResponseEmail.objects.count(), 5)
         eq_(ResponseEmail.objects.filter(
             opinion__created__gte=cutoff).count(),
@@ -296,9 +331,20 @@ class TestParseData(ElasticTestCase):
         eq_(ResponseContext.objects.filter(
             opinion__created__gte=cutoff).count(),
             5)
+        eq_(ResponsePI.objects.count(), 5)
+        eq_(ResponsePI.objects.filter(
+            opinion__created__gte=cutoff).count(),
+            5)
+        eq_(1,
+            Record.objects.filter(action='purge_data').count())
+        expected_msg = ('feedback_responseemail: 5, '
+                        'feedback_responsecontext: 5, '
+                        'feedback_responsepi: 5')
+        eq_(expected_msg,
+           Record.objects.get(action='purge_data').msg)
 
         # Everything should still be in the index, but the number of
         # things with has_email=True should go down
         resp_s = ResponseMappingType.search()
-        eq_(resp_s.count(), 20)
+        eq_(resp_s.count(), 30)
         eq_(resp_s.filter(has_email=True).count(), 5)

@@ -12,6 +12,24 @@ correctness for behavioral details.
 Running tests
 =============
 
+Setup
+-----
+
+Before you run the tests, you have to run the ``collectstatic`` command. This
+compiles LESS files to CSS files and creates the bundles that some of
+the tests require to run. If you don't do this, then a few of the
+tests will fail.
+
+To run collectstatic, do::
+
+    ./manage.py collectstatic
+
+You don't have to do this often. I'd do it the first time and then any
+time you run the tests with a fresh db.
+
+FIXME: This is annoying and it'd be nice to get it fixed.
+
+
 Running tests and arguments
 ---------------------------
 
@@ -20,20 +38,17 @@ To run the test suite, do::
     ./manage.py test
 
 
-However, that doesn't provide the most sensible defaults. Amongst
-other things, you see tons and tons and tons and tons and tons and
-tons and tons and tons and tons and tons and tons and tons and tons of
-debugging output. Ew.
+The ``NOSE_ARGS`` setting in ``fjord/settings/local.py`` sets some
+default arguments so you don't see tons and tons and tons and tons and
+tons and tons and tons and tons and tons and tons and tons and tons
+and tons of debugging output. Ew.
 
-I suggest you run it this way::
+If you ever need to see that debugging, comment the arguments out.
 
-    ./manage.py test -s --noinput --logging-clear-handlers
-
-
-The ``-s`` flag is important if you want to be able to drop into PDB
+The ``--nocapture`` flag is important if you want to be able to drop into PDB
 from within tests.
 
-Some other helpful flags are:
+Other helpful flags when debugging are:
 
 ``-x``:
   Fast fail. Exit immediately on failure. No need to run the whole
@@ -52,11 +67,32 @@ The test suite will create a new database named ``test_%s`` where
 ``%s`` is whatever value you have for
 ``settings.DATABASES['default']['NAME']``.
 
-When the schema changes, you may need to drop the test database. You
-can also run the test suite with ``FORCE_DB`` once to cause Django to
-drop and recreate it::
+If you know there haven't been any schema changes, you can run the
+tests with ``REUSE_DB=1`` in the environment. This will reuse the existing
+database::
 
-    FORCE_DB=1 ./manage.py test -s --noinput --logging-clear-handlers
+    REUSE_DB=1 ./manage.py test -s --noinput --logging-clear-handlers
+
+
+Further, running the test suite can be a good way to suss out Python
+warnings and 2to3 problems. To do that, run the test suite like this::
+
+    python -t -3 -Wd ./manage.py test
+
+
+Argument explanations:
+
+``-t``
+    Issue warnings about inconsistent tab usage.
+
+``-3``
+    Warns about Python 3.x incompatabilities that 2to3 can't fix.
+
+``-Wd``
+    Enables default warnings.
+
+
+See ``python -h`` for details and other arguments you can use.
 
 
 Running specific tests
@@ -85,9 +121,6 @@ cover the new functionality. All apps have a ``tests`` module where
 tests should go. They will be discovered automatically by the test
 runner as long as the look like a test.
 
-* Avoid naming test files ``test_utils.py``, since we use a library
-  with the same name. Use ``test__utils.py`` instead.
-
 * If you're expecting ``reverse`` to return locales in the URL, use
   ``LocalizingClient`` instead of the default client for the
   ``TestCase`` class.
@@ -103,9 +136,31 @@ runner as long as the look like a test.
 Writing New JavaScript Tests
 ============================
 
+JavaScript tests are not run in our normal unit test suite. Instead we have
+a different test system.
+
 We test JavaScript utility functions using `QUnit <http://qunitjs.com/>`_.
 
-These tests are in ``fjord/base/static/tests/``.
+These tests are located in ``fjord/base/static/tests/``.
+
+
+Running tests
+-------------
+
+Launch the server with::
+
+    ./manage.py runserver
+
+Then go to::
+
+    http://127.0.0.1:8000/static/tests/index.html
+
+(You might have to use a different protocol, host and port depending
+on how you have Fjord set up.)
+
+
+Adding tests
+------------
 
 To add a new test suite, add a couple of ``script`` lines to ``index.html`` in
 the relevant place and then create a new ``test_FILENAMEHERE.js`` file

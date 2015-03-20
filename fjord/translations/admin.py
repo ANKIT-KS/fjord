@@ -8,9 +8,9 @@ from django.utils.module_loading import import_by_path
 
 from .gengo_utils import FjordGengo, GENGO_MACHINE_UNSUPPORTED
 from .models import GengoJob, GengoOrder
-from .tasks import create_translation_tasks
+from .tasks import translate_tasks_by_id_list
 from .utils import locale_equals_language
-from fjord.base.util import smart_date, smart_str
+from fjord.base.utils import smart_date, smart_str
 from fjord.feedback.models import Product
 from fjord.journal.models import Record
 
@@ -144,17 +144,18 @@ def gengo_translator_view(request):
     })
 
 
-admin.site.register_view('gengo-translator-view', gengo_translator_view,
-                         'Translations - Gengo Maintenance')
+admin.site.register_view(path='gengo-translator-view',
+                         name='Translations - Gengo Maintenance',
+                         view=gengo_translator_view)
 
 
 def translations_management_backfill_view(request):
     """Takes start and end dates and a model and backfills translations"""
     date_start = smart_date(request.POST.get('date_start'))
     date_end = smart_date(request.POST.get('date_end'))
-    model = smart_str(request.POST.get('model'))
+    model_path = smart_str(request.POST.get('model'))
 
-    if request.method == 'POST' and date_start and date_end and model:
+    if request.method == 'POST' and date_start and date_end and model_path:
         # NB: We just let the errors propagate because this is an
         # admin page. That way we get a traceback and all that detail.
 
@@ -164,23 +165,32 @@ def translations_management_backfill_view(request):
         # FIXME: We should do this in a less goofy way.
         date_end = date_end + timedelta(days=1)
 
-        model_cls = import_by_path(model)
+        model_cls = import_by_path(model_path)
 
-        # FIXME: This assumes the model has a "created" field. If it
-        # doesn't, then this breaks. When we have another model that we
-        # want to translate, we can figure out how to generalize this
-        # then.
-        objects = model_cls.objects.filter(
-            created__gte=date_start,
-            created__lte=date_end
+        # Get list of ids of all objects that need translating.
+        id_list = list(
+            model_cls.objects.need_translations(
+                date_start=date_start, date_end=date_end
+            )
+            .values_list('id', flat=True)
         )
 
-        total_jobs = 0
+        num = len(id_list)
 
-        for instance in objects:
-            total_jobs += len(create_translation_tasks(instance))
+        CHUNK_SIZE = 100
 
-        messages.success(request, '%s jobs added' % total_jobs)
+        # Need to generate a bunch of separate tasks because they take
+        # a long time to run, so we do CHUNK_SIZE per task.
+        while id_list:
+            chunk = id_list[:CHUNK_SIZE]
+            id_list = id_list[CHUNK_SIZE:]
+            translate_tasks_by_id_list.delay(model_path, chunk)
+
+        messages.success(
+            request,
+            u'Task created to backfill translations for %s instances' % num
+        )
+
         return HttpResponseRedirect(request.path)
 
     from fjord.translations.tasks import REGISTERED_MODELS
@@ -200,9 +210,9 @@ def translations_management_backfill_view(request):
 
 
 admin.site.register_view(
-    'translations-management-backfill-view',
-    translations_management_backfill_view,
-    'Translations - General - Backfill')
+    path='translations-management-backfill-view',
+    name='Translations - General - Backfill',
+    view=translations_management_backfill_view)
 
 
 def translations_management_view(request):
@@ -225,5 +235,6 @@ def translations_management_view(request):
 
 
 admin.site.register_view(
-    'translations-management-view', translations_management_view,
-    'Translations - General')
+    path='translations-management-view',
+    name='Translations - General',
+    view=translations_management_view)

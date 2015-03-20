@@ -4,7 +4,7 @@ from django.contrib.contenttypes import generic
 from django.contrib.contenttypes.models import ContentType
 from django.db import models
 
-from fjord.base.models import ModelBase, JSONObjectField
+from fjord.base.models import JSONObjectField
 
 
 RECORD_INFO = u'info'
@@ -22,10 +22,11 @@ class RecordManager(models.Manager):
             type=type_,
             src=src,
             action=action,
-            content_object=instance,
             msg=msg,
             metadata=metadata
         )
+        if instance and isinstance(instance, models.Model):
+            rec.content_object = instance
         rec.save()
         return rec
 
@@ -42,7 +43,7 @@ class RecordManager(models.Manager):
         )
 
 
-class Record(ModelBase):
+class Record(models.Model):
     """Defines an audit record for something that happened in translations"""
 
     TYPE_CHOICES = [
@@ -77,11 +78,8 @@ class Record(ModelBase):
 
     # Any metadata related to this entry in the form of a Python dict which
     # is stored as a JSON object
-    metadata = JSONObjectField(default=u'{}')
+    metadata = JSONObjectField()
 
-    # Note: This doesn't use django-cache-machine. These objects are
-    # mostly for site maintenance purposes and thus we don't really
-    # want to be dealing with cache.
     objects = RecordManager()
 
     def __unicode__(self):

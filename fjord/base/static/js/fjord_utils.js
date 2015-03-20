@@ -1,9 +1,13 @@
 window.fjord = window.fjord || {};
 
-(function() {
+(function($, fjord, document) {
+    'use strict';
+
     /**
-     * Validates a string as an email address
-     * @param {string} text - The text we're validating.
+     * Validates a string as an email address.
+     *
+     * @param {string} text - The string to validate.
+     *
      * @returns {boolean}
      */
     fjord.validateEmail = function(text) {
@@ -24,6 +28,7 @@ window.fjord = window.fjord || {};
      *
      * @param s {string} - The string to interpolate.
      * @param args {varies} - The arguments to interpolate into the string.
+     *
      * @returns {string}
      */
     fjord.format = function(s, args) {
@@ -33,6 +38,7 @@ window.fjord = window.fjord || {};
 
     /**
      * Returns the current query string as a JavaScript object.
+     *
      * @returns {Object}
      */
     fjord.getQuerystring = function() {
@@ -77,4 +83,72 @@ window.fjord = window.fjord || {};
         }
         window.location.search = '?' + parts.join('&');
     };
-}());
+
+    /**
+     * Detect browser <input type="date" ...> support.
+     *
+     * @returns {boolean}
+     */
+    fjord.isDateInputSupported = function() {
+        var input = document.createElement('input');
+        input.setAttribute('type','date');
+        var notADateValue = 'not-a-date';
+        input.setAttribute('value', notADateValue);
+
+        return input.value !== notADateValue;
+    };
+
+    /**
+    * Validates a URL.
+    *
+    * @param {string} url - The url we're validating.
+    *
+    * @returns {boolean}
+    */
+    fjord.validateUrl = function(url) {
+        if (url.length > 0) {
+            var aboutUrlRegExp = /^about:/;
+            var chromeUrlRegExp = /^chrome:\/\//;
+            var urlRegExp = /^((ftp|http|https):\/\/)?(\w+:{0,1}\w*@)?(\S+\.\S+)(:[0-9]+)?(\/|\/([\w#!:.?+=&%@!\-\/]))?$/;
+
+            if (urlRegExp.test(url) ||
+                    aboutUrlRegExp.test(url) ||
+                    chromeUrlRegExp.test(url)) {
+                return true;
+            }
+        }
+        return false;
+    };
+
+    /**
+     * Updates related character counter for a inputElement (text)
+     * with correct count.
+     *
+     * The id for the related character counter must be the id
+     * of the inputElement with "-counter" appended to it.
+     *
+     * The character count max is the "data-max-length" property of
+     * the inputElement.
+     *
+     * If the number of characters is beyond the data-max-length, then
+     * it adds the "error" class to the inputElement.
+     *
+     * If the number of characters is beyond 80% of the
+     * data-max-length, then it adds the "warning" class to the
+     * inputElement.
+     *
+     * @param {elem} inputElement - The element to count characters of.
+     */
+    fjord.countRemaining = function(inputElement) {
+        var $desc = $(inputElement);
+        var $counter = $('#' + $desc.attr('id') + '-counter');
+        var max = $desc.attr('data-max-length');
+        var remaining = max - $desc.val().replace(/\s+/, '').length;
+
+        $desc.toggleClass('error', remaining < 0);
+
+        $counter.text(remaining);
+        $counter.toggleClass('error', remaining < 0);
+        $counter.toggleClass('warning', (remaining >= 0 && remaining <= Math.round(max * 0.2)));
+    };
+}(jQuery, window.fjord, document));

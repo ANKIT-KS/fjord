@@ -212,7 +212,8 @@ PROD_LANGUAGES = [
     'zu'
 ]
 
-DEV_LANGUAGES = PROD_LANGUAGES
+DEV_LANGUAGES = PROD_LANGUAGES + ['xx']
+
 
 def lazy_lang_url_map():
     from django.conf import settings
@@ -246,34 +247,31 @@ INSTALLED_APPS = (
     # Third-party apps, patches, fixes
     'commonware.response.cookies',
     'djcelery',
-    'django_nose',
     'session_csrf',
     'waffle',
 
-    # L10n
     'product_details',
-
-    # south has to come early, otherwise tests fail.
-    'south',
 
     'adminplus',
 
-    # This has to come before Grappelli since it contains the
-    # admin/index.html template that overrides the Grappelli one
-    # and provides the adminplus stuff.
+    # This has to come before Grappelli since it contains fixed HTML
+    # for displaying django-adminplus custom views in the Grappelli
+    # index.html page.
     'fjord.grappellioverride',
     'grappelli',
     'django.contrib.admin',
     'django.contrib.messages',
     'django_extensions',
     'django_nose',
-    'djcelery',
     'eadred',
     'jingo_minify',
     'dennis.django_dennis',
 
+    'fjord.alerts',
     'fjord.analytics',
+    'fjord.api_auth',
     'fjord.base',
+    'fjord.events',
     'fjord.feedback',
     'fjord.flags',
     'fjord.heartbeat',
@@ -315,6 +313,7 @@ SUPPORTED_NONLOCALES = [
     'browserid',
     'media',
     'robots.txt',
+    'contribute.json',
     'services',
     'static',
 ]
@@ -369,19 +368,16 @@ MINIFY_BUNDLES = {
             'css/fjord.less',
         ),
         'dashboard': (
-            'css/ui-lightness/jquery-ui.css',
+            'css/ui-lightness-jquery-ui.css',
             'css/lib/normalize.css',
             'css/fjord.less',
             'css/dashboard.less',
         ),
         'monitor': (
-            'css/ui-lightness/jquery-ui.css',
+            'css/ui-lightness-jquery-ui.css',
             'css/lib/normalize.css',
             'css/fjord.less',
             'css/monitor.less',
-        ),
-        'stage': (
-            'css/stage.less',
         ),
         'mobile/base': (
             'css/lib/normalize.css',
@@ -389,16 +385,7 @@ MINIFY_BUNDLES = {
         ),
         'generic_feedback': (
             'css/lib/normalize.css',
-            'css/lib/brick-1.0.0.byob.min.css',
-            'css/feedback_base.less',
             'css/generic_feedback.less',
-        ),
-        'product_picker': (
-            'css/lib/normalize.css',
-            'css/lib/brick-1.0.0.byob.min.css',
-            'css/feedback_base.less',
-            'css/generic_feedback.less',
-            'css/product_picker.less',
         ),
         'thanks': (
             'css/lib/normalize.css',
@@ -414,6 +401,7 @@ MINIFY_BUNDLES = {
     'js': {
         'base': (
             'js/lib/jquery.min.js',
+            'browserid/api.js',
             'browserid/browserid.js',
             'js/init.js',
             'js/ga.js',
@@ -428,6 +416,7 @@ MINIFY_BUNDLES = {
             'js/lib/jquery.flot.time.js',
             'js/lib/jquery.flot.resize.js',
             'js/dashboard.js',
+            'browserid/api.js',
             'browserid/browserid.js',
             'js/ga.js',
         ),
@@ -441,6 +430,7 @@ MINIFY_BUNDLES = {
             'js/lib/jquery.flot.time.js',
             'js/lib/jquery.flot.resize.js',
             'js/hourly_dashboard.js',
+            'browserid/api.js',
             'browserid/browserid.js',
             'js/ga.js',
         ),
@@ -454,6 +444,7 @@ MINIFY_BUNDLES = {
             'js/lib/jquery.flot.time.js',
             'js/lib/jquery.flot.resize.js',
             'js/product_dashboard.js',
+            'browserid/api.js',
             'browserid/browserid.js',
             'js/ga.js',
         ),
@@ -467,6 +458,7 @@ MINIFY_BUNDLES = {
             'js/lib/jquery.flot.time.js',
             'js/lib/jquery.flot.resize.js',
             'js/product_dashboard_firefox.js',
+            'browserid/api.js',
             'browserid/browserid.js',
             'js/ga.js',
         ),
@@ -477,6 +469,7 @@ MINIFY_BUNDLES = {
         'generic_feedback': (
             'js/lib/jquery.min.js',
             'js/fjord_utils.js',
+            'js/remote.js',
             'js/common_feedback.js',
             'js/generic_feedback.js',
             'js/ga.js',
@@ -554,18 +547,11 @@ TEMPLATE_CONTEXT_PROCESSORS = (
     'django.contrib.messages.context_processors.messages',
     'fjord.base.context_processors.i18n',
     'fjord.base.context_processors.globals',
-    'django_browserid.context_processors.browserid',
 )
 
 TEMPLATE_DIRS = (
     path('templates'),
 )
-
-# Should robots.txt deny everything or disallow a calculated list of
-# URLs we don't want to be crawled?  Default is false, disallow
-# everything.  Also see
-# http://www.google.com/support/webmasters/bin/answer.py?answer=93710
-ENGAGE_ROBOTS = False
 
 # Always generate a CSRF token for anonymous users.
 ANON_ALWAYS = True
@@ -586,10 +572,7 @@ DOMAIN_METHODS = {
     ]
 }
 
-
-# When set to True, this will cause a message to be displayed on all
-# pages that this is not production.
-SHOW_STAGE_NOTICE = False
+WSGI_APPLICATION = 'fjord.wsgi.application'
 
 # Gengo settings
 GENGO_PUBLIC_KEY = None
@@ -600,7 +583,7 @@ GENGO_ACCOUNT_BALANCE_THRESHOLD = 100.0
 STATICFILES_FINDERS = (
     'django.contrib.staticfiles.finders.FileSystemFinder',
     'django.contrib.staticfiles.finders.AppDirectoriesFinder',
-    'compressor.finders.CompressorFinder'
+    'fjord.base.static_utils.WTFinder',
 )
 
 # ElasticSearch settings.
@@ -652,6 +635,13 @@ REST_FRAMEWORK = {
 # Grappelli settings
 GRAPPELLI_ADMIN_TITLE = 'Input admin and diabolical dashboard'
 
+# Waffle settings
+# Always allow for override via querystring
+WAFFLE_OVERRIDE = True
+
+# Switch the test runner to django-nose
+TEST_RUNNER = 'django_nose.NoseTestSuiteRunner'
+
 # For absolute urls
 try:
     DOMAIN = socket.gethostname()
@@ -666,11 +656,6 @@ HAS_SYSLOG = True
 SYSLOG_TAG = "http_app_playdoh"  # Change this after you fork.
 LOGGING_CONFIG = None
 LOGGING = {}
-
-try:
-    len(LOGGING)
-except AttributeError:
-    LOGGING = {}
 
 LOGGING.setdefault('loggers', {})['elasticsearch'] = {
     'level': logging.ERROR

@@ -12,6 +12,7 @@ from django.http import (
 from django.shortcuts import render
 from django.utils.http import is_safe_url
 from django.views.decorators.cache import never_cache
+from django.views.decorators.csrf import csrf_exempt
 
 from celery.messaging import establish_connection
 from elasticsearch.exceptions import ConnectionError, NotFoundError
@@ -74,7 +75,13 @@ def about_view(request):
 def robots_view(request):
     """Generate a robots.txt."""
     template = render(request, 'robots.txt')
-    return HttpResponse(template, mimetype='text/plain')
+    return HttpResponse(template, content_type='text/plain')
+
+
+def contribute_view(request):
+    """Generate a contribute.json."""
+    template = render(request, 'contribute.json')
+    return HttpResponse(template, content_type='application/json')
 
 
 def test_memcached(host, port):
@@ -222,6 +229,7 @@ class IntentionalException(Exception):
 
 
 @dev_or_authorized
+@csrf_exempt
 def throw_error(request):
     """Throw an error for testing purposes."""
     raise IntentionalException("Error raised for testing purposes.")

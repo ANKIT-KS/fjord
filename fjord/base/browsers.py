@@ -4,6 +4,8 @@ from collections import namedtuple
 
 # From http://msdn.microsoft.com/en-us/library/ms537503(v=vs.85).aspx
 WINDOWS_VERSION = {
+    'Windows NT 10.0': ('Windows', '10'),
+    'Windows NT 6.4': ('Windows', '10'),
     'Windows NT 6.3': ('Windows', '8.1'),
     'Windows NT 6.2': ('Windows', '8'),
     'Windows NT 6.1': ('Windows', '7'),
@@ -39,7 +41,8 @@ def parse_ua(ua):
 
     :returns: Browser namedtuple with attributes:
 
-        - browser: "Unknown" or a browser like "Firefox", "Iceweasel", etc.
+        - browser: "Unknown" or a browser like "Firefox", "Iceweasel",
+          "Firefox for Android", etc.
         - browser_version: "Unknown" or a 3 dotted section like "14.0.1",
           "4.0.0", etc.
         - platform: "Unknown" or a platform like "Windows", "OS X",
@@ -127,6 +130,8 @@ def parse_ua(ua):
                 break
         if platform_version:
             platform_version = platform_version.replace('_', '.')
+    elif browser == 'Firefox' and platform == 'Android':
+        browser = 'Firefox for Android'
 
     # Firefox OS doesn't list a platform because "The web is the
     # platform."  It is the only platform to do this, so we can still

@@ -10,7 +10,13 @@
       {{ css('base') }}
     {% endblock %}
 
-    <link rel="shortcut icon" type="image/png" href="{{ settings.STATIC_URL }}img/favicon.png"/>
+    <link rel="shortcut icon" type="image/png" sizes="512x512" href="{{ settings.STATIC_URL }}img/firefox-512.png?v=1">
+    <link rel="shortcut icon" type="image/png" sizes="256x256" href="{{ settings.STATIC_URL }}img/firefox-256.png?v=1">
+    <link rel="shortcut icon" type="image/png" sizes="128x128" href="{{ settings.STATIC_URL }}img/firefox-128.png?v=1">
+    <link rel="shortcut icon" type="image/png" sizes="64x64" href="{{ settings.STATIC_URL }}img/firefox-64.png?v=1">
+    <link rel="shortcut icon" type="image/png" sizes="32x32" href="{{ settings.STATIC_URL }}img/firefox-32.png?v=1">
+    <link rel="shortcut icon" type="image/png" sizes="16x16" href="{{ settings.STATIC_URL }}img/firefox-16.png?v=1">
+
     {% block feeds %}{% endblock %}
     {% block extra_headers %}{% endblock %}
   </head>
@@ -55,20 +61,11 @@
               {% endif %}
               <li>{{ browserid_logout(text=_('Sign out')) }}</li>
             {% else %}
-              <li>{{ browserid_login(text=_('Sign in')) }}</li>
+              <li>{{ browserid_login(text=_('Sign in'), next=request.get_full_path()) }}</li>
             {% endif %}
           </ul>
         </header>
       {% endblock site_header %}
-
-      {% if settings.SHOW_STAGE_NOTICE %}
-        {{ css('stage') }}
-        <div class="stage-banner">
-          <div class="close-button">X</div>
-          This is a dev/staging site. The production site is
-          <a href="http://input.mozilla.org">here</a>.
-        </div>
-      {% endif %}
 
       <div id="content">
         {% block content %}{% endblock %}

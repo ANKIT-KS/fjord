@@ -9,7 +9,7 @@ Things to know about l10n
 =========================
 
 1. translations are done in `Verbatim
-   <https://localize.mozilla.org/>`_ 
+   <https://localize.mozilla.org/>`_
 
 2. translators are looking at our -dev environment to see the strings
    in use
@@ -18,25 +18,33 @@ Things to know about l10n
    minutes that updates the svn locale repository so that translators
    can see the latest stuff
 
-:svn url:           https://svn.mozilla.org/projects/l10n-misc/trunk/input/locale
-:viewvc svn:        http://viewvc.svn.mozilla.org/vc/projects/l10n-misc/trunk/input/locale/
-:Input in Verbatim: https://localize.mozilla.org/projects/input/
+:svn url:    https://svn.mozilla.org/projects/l10n-misc/trunk/input/locale
+:viewvc svn: http://viewvc.svn.mozilla.org/vc/projects/l10n-misc/trunk/input/locale/
+:Verbatim:   https://localize.mozilla.org/projects/input/
 
 
 Installing localizations from svn
 =================================
 
-Localizations are not stored in this repository, but are in Mozilla's SVN.
+Localizations are not stored in this repository--they're in Mozilla's
+subversion repository.
 
 To get the localizations, do::
 
     svn checkout https://svn.mozilla.org/projects/l10n-misc/trunk/input/locale locale
 
+To see the translated strings, you need to first compile the .po files to
+.mo files::
+
+    ./bin/compile-mo.sh locale/
+
+Then you need to comment out the ``DEV_LANGUAGES`` option from your local
+settings file, ``./fjord/settings/local.py``.
 
 .. _l10n-update-strings:
 
-Updating strings in svn
-=======================
+Extract/merge/sync strings with svn
+===================================
 
 First, ping Kadir (or whoever else) and tell him/her we're merging strings
 (i.e. extracting them from our codebase and committing the changes to svn).
@@ -52,14 +60,10 @@ Then, extract the strings from the codebase::
     ./manage.py extract
     ./manage.py merge
 
-(Optional) To see changes in the project::
-
-    ./bin/compile-mo.sh locale/
-
 Then, commit the new strings to svn::
 
     cd locale
-    svn commit -m 'String update YYYY/MM/DD'
+    svn commit -m 'Input strings update YYYY/MM/DD'
 
 Then, tell him/her that the strings have been extracted. He/she will
 update Verbatim for all locales.
@@ -75,7 +79,7 @@ After that, send an email to the `dev-l10n-web mailing list
 
     I've just pushed new strings to Verbatim for Input.
 
-    https://lists.mozilla.org/listinfo/dev-l10n-web
+    https://localize.mozilla.org/projects/input/
 
     < explanation of strings changes here >
 
@@ -91,8 +95,19 @@ After that, send an email to the `dev-l10n-web mailing list
     Input development team
 
 
+Sometimes we have to create bugs for each individual locale to update the
+translations. It's nice to copy/paste the specific strings that need to be
+translated.
+
+Sometimes the translator says they've finished, but the string updates aren't
+in svn. If that happens, tell the translator that they have to push the
+"Commit to VCS" button/link.
+
+
 Creating new localization locales
 =================================
+
+FIXME: This section is probably wrong.
 
 In your projects ``settings.py`` add the new locale to
 ``KNOWN_LANGUAGES``.

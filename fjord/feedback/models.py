@@ -4,18 +4,23 @@ from django.core.cache import cache
 from django.core.exceptions import ValidationError
 from django.db import models
 
-from caching.base import CachingManager
 from elasticutils.contrib.django import Indexable, MLT
 from product_details import product_details
 from rest_framework import serializers
 from statsd import statsd
 from tower import ugettext_lazy as _lazy
 
+from fjord.base.browsers import parse_ua
 from fjord.base.domain import get_domain
 from fjord.base.models import ModelBase, JSONObjectField, EnhancedURLField
-from fjord.base.util import smart_truncate, instance_to_key, is_url
-from fjord.feedback.config import CODE_TO_COUNTRY, ANALYSIS_STOPWORDS
+from fjord.base.utils import smart_truncate, instance_to_key, is_url
+from fjord.feedback.config import (
+    CODE_TO_COUNTRY,
+    ANALYSIS_STOPWORDS,
+    TRUNCATE_LENGTH
+)
 from fjord.feedback.utils import compute_grams
+from fjord.journal.utils import j_info
 from fjord.search.index import (
     register_mapping_type,
     FjordMappingType,
@@ -32,13 +37,7 @@ from fjord.translations.models import get_translation_system_choices
 from fjord.translations.tasks import register_auto_translation
 
 
-# This defines the number of characters the description can have.  We
-# do this in code rather than in the db since it makes it easier to
-# tweak the value.
-TRUNCATE_LENGTH = 10000
-
-
-class ProductManager(CachingManager):
+class ProductManager(models.Manager):
     def public(self):
         """Returns publicly visible products"""
         return self.filter(on_dashboard=True)
@@ -53,18 +52,29 @@ class Product(ModelBase):
     notes = models.CharField(max_length=255, blank=True, default=u'')
 
     # This is the name we display everywhere
-    display_name = models.CharField(max_length=20)
+    display_name = models.CharField(max_length=50)
 
     # We're not using foreign keys, so when we save something to the
     # database, we use this name
-    db_name = models.CharField(max_length=20)
+    db_name = models.CharField(max_length=50)
 
     # This is the slug used in the feedback product urls; we don't use
     # the SlugField because we don't require slugs be unique
-    slug = models.CharField(max_length=20)
+    slug = models.CharField(max_length=50)
 
-    # Whether or not this product shows up on the dashboard
+    # Whether or not this product shows up on the dashboard; we sort of
+    # use this to denote whether data is publicly available, too
     on_dashboard = models.BooleanField(default=True)
+
+    # Whether or not this product shows up in the product picker
+    on_picker = models.BooleanField(default=True)
+
+    # The image we use on the product picker. This has to be a valid
+    # image in fjord/feedback/static/img/ and should be a .png of
+    # size 295x285.
+    # FIXME: Make this more flexible.
+    image_file = models.CharField(max_length=100, null=True, blank=True,
+                                  default=u'noimage.png')
 
     # System slated for automatic translation, or null if none;
     # See translation app for details.
@@ -75,6 +85,17 @@ class Product(ModelBase):
         max_length=20,
     )
 
+    # If this product should grab browser data, which browsers should
+    # it grab browser data for. Note, this value should match what
+    # we're inferring from the user agent.
+    browser_data_browser = models.CharField(
+        max_length=100, blank=True, default=u'',
+        help_text=u'Grab browser data for browser product')
+
+    browser = models.CharField(
+        max_length=30, blank=True, default=u'',
+        help_text=u'User agent inferred browser for this product if any')
+
     objects = ProductManager()
 
     @classmethod
@@ -83,15 +104,37 @@ class Product(ModelBase):
 
     @classmethod
     def get_product_map(cls):
-        """Returns map of product slug -> db_name"""
-        products = cls.objects.values_list('slug', 'db_name')
+        """Return map of product slug -> db_name for enabled products"""
+        products = (cls.objects
+                    .filter(enabled=True)
+                    .values_list('slug', 'db_name'))
         return dict(prod for prod in products)
+
+    def collect_browser_data_for(self, browser):
+        """Return whether we should collect browser data from this browser"""
+        return browser and browser == self.browser_data_browser
 
     def __unicode__(self):
         return self.display_name
 
     def __repr__(self):
         return self.__unicode__().encode('ascii', 'ignore')
+
+
+class ResponseManager(models.Manager):
+    def need_translations(self, date_start=None, date_end=None):
+        """Returns responses that are translationless
+
+        Allows for optional timeframe so we can use this for
+        identifying instances that need to be backfilled.
+
+        """
+        objs = self.filter(translated_description='')
+        if date_start:
+            objs = objs.filter(created__gte=date_start)
+        if date_end:
+            objs = objs.filter(created__lte=date_end)
+        return objs
 
 
 @register_auto_translation
@@ -106,6 +149,7 @@ class Response(ModelBase):
     response was created:
 
     * happy
+    * rating
     * url
     * description
     * user_agent
@@ -115,12 +159,9 @@ class Response(ModelBase):
 
     """
 
-    # This is the product/channel.
-    # e.g. "firefox.desktop.stable", "firefox.mobile.aurora", etc.
-    prodchan = models.CharField(max_length=255)
-
     # Data coming from the user
     happy = models.BooleanField(default=True)
+    rating = models.PositiveIntegerField(null=True)
     url = EnhancedURLField(blank=True)
     description = models.TextField(blank=True)
 
@@ -133,6 +174,7 @@ class Response(ModelBase):
     # Data inferred from urls or explicitly stated by the thing saving
     # the data (webform, client of the api, etc)
     product = models.CharField(max_length=30, blank=True)
+    platform = models.CharField(max_length=30, blank=True)
     channel = models.CharField(max_length=30, blank=True)
     version = models.CharField(max_length=30, blank=True)
     locale = models.CharField(max_length=8, blank=True)
@@ -144,13 +186,13 @@ class Response(ModelBase):
 
     # If using the api, this is the version of the api used. Otherwise
     # null.
-    api = models.IntegerField(null=True)
+    api = models.IntegerField(null=True, blank=True)
 
     # User agent and inferred data from the user agent
     user_agent = models.CharField(max_length=255, blank=True)
     browser = models.CharField(max_length=30, blank=True)
     browser_version = models.CharField(max_length=30, blank=True)
-    platform = models.CharField(max_length=30, blank=True)
+    browser_platform = models.CharField(max_length=30, blank=True)
 
     source = models.CharField(max_length=100, blank=True, null=True,
                               default=u'')
@@ -158,6 +200,8 @@ class Response(ModelBase):
                                 default=u'')
 
     created = models.DateTimeField(default=datetime.now)
+
+    objects = ResponseManager()
 
     class Meta:
         ordering = ['-created']
@@ -263,6 +307,9 @@ class Response(ModelBase):
             'manufacturer',
             'device',
             'platform',
+            'browser',
+            'browser_version',
+            'browser_platform',
         ]
 
         if confidential:
@@ -275,6 +322,8 @@ class Response(ModelBase):
 
     def save(self, *args, **kwargs):
         self.description = self.description.strip()[:TRUNCATE_LENGTH]
+        if self.rating is not None:
+            self.happy = False if self.rating <= 3 else True
         super(Response, self).save(*args, **kwargs)
 
     @property
@@ -288,6 +337,12 @@ class Response(ModelBase):
         if self.responseemail_set.count() > 0:
             return self.responseemail_set.all()[0].email
         return u''
+
+    @property
+    def has_browserdata(self):
+        if self.responsepi_set.exists():
+            return True
+        return False
 
     @property
     def sentiment(self):
@@ -325,17 +380,38 @@ class Response(ModelBase):
         return ResponseMappingType
 
     @classmethod
-    def infer_product(cls, platform):
-        if platform == u'Firefox OS':
-            return u'Firefox OS'
-
-        elif platform == u'Android':
+    def infer_product(cls, browser):
+        # FIXME: This is hard-coded.
+        if browser.browser == u'Firefox for Android':
             return u'Firefox for Android'
 
-        elif platform in (u'', u'Unknown'):
+        elif browser.platform == u'Firefox OS':
+            return u'Firefox OS'
+
+        elif browser.platform in (u'', u'Unknown'):
             return u''
 
+        # FIXME: We can do this because our user agent parser only
+        # knows about Mozilla browsers. If we ever change user agent
+        # parsers, we'll need to rethink this.
         return u'Firefox'
+
+    @classmethod
+    def infer_platform(cls, product, browser):
+        # FIXME: This is hard-coded.
+        if product == u'Firefox OS':
+            return u'Firefox OS'
+
+        elif product == u'Firefox for Android':
+            return u'Android'
+
+        elif (browser.browser == u'Firefox' and
+              product in (u'Firefox', u'Firefox dev')):
+            if browser.platform == 'Windows':
+                return browser.platform + ' ' + browser.platform_version
+            return browser.platform
+
+        return u''
 
 
 @register_mapping_type
@@ -388,7 +464,6 @@ class ResponseMappingType(FjordMappingType, Indexable):
     def get_mapping(cls):
         return {
             'id': integer_type(),
-            'prodchan': keyword_type(),
             'happy': boolean_type(),
             'api': integer_type(),
             'url': keyword_type(),
@@ -423,7 +498,6 @@ class ResponseMappingType(FjordMappingType, Indexable):
 
         doc = {
             'id': obj.id,
-            'prodchan': obj.prodchan,
             'happy': obj.happy,
             'api': obj.api,
             'url': obj.url,
@@ -449,7 +523,7 @@ class ResponseMappingType(FjordMappingType, Indexable):
                 (obj.source or '--'),
                 (obj.campaign or '--')
             ]),
-            'organic': (not obj.source and not obj.campaign),
+            'organic': (not obj.campaign),
             'created': obj.created,
         }
 
@@ -533,7 +607,16 @@ class ResponseContext(ModelBase):
     """Holds context data we were sent as a JSON blob."""
 
     opinion = models.ForeignKey(Response)
-    data = JSONObjectField(default=u'{}')
+    data = JSONObjectField()
+
+    def __unicode__(self):
+        return unicode(self.id)
+
+
+class ResponsePI(ModelBase):
+    """Holds remote-troubleshooting and other product data."""
+    opinion = models.ForeignKey(Response)
+    data = JSONObjectField()
 
     def __unicode__(self):
         return unicode(self.id)
@@ -593,8 +676,9 @@ class PostResponseSerializer(serializers.Serializer):
         value = attrs[source]
         if value:
             if not is_url(value):
-                raise serializers.ValidationError(
-                    '{0} is not a valid url'.format(value))
+                msg = u'{0} is not a valid url'.format(value)
+                raise serializers.ValidationError(msg)
+
 
         return attrs
 
@@ -614,15 +698,7 @@ class PostResponseSerializer(serializers.Serializer):
         # Note: instance should never be anything except None here
         # since we only accept POST and not PUT/PATCH.
 
-        # prodchan is composed of product + channel. This is a little
-        # goofy, but we can fix it later if we bump into issues with
-        # the contents.
-        prodchan = u'.'.join([
-            attrs['product'].lower().replace(' ', '') or 'unknown',
-            attrs['channel'].lower().replace(' ', '') or 'unknown'])
-
         opinion = Response(
-            prodchan=prodchan,
             happy=attrs['happy'],
             url=attrs['url'].strip(),
             description=attrs['description'].strip(),
@@ -635,11 +711,22 @@ class PostResponseSerializer(serializers.Serializer):
             manufacturer=attrs['manufacturer'].strip(),
             device=attrs['device'].strip(),
             country=attrs['country'].strip(),
-            user_agent=attrs['user_agent'].strip(),
             source=attrs['source'].strip(),
             campaign=attrs['campaign'].strip(),
             api=1,  # Hard-coded api version number
         )
+
+        # If there's a user agent, infer all the things from the user
+        # agent.
+        user_agent = attrs['user_agent'].strip()
+        if user_agent:
+            opinion.user_agent = user_agent
+            browser = parse_ua(user_agent)
+            opinion.browser = browser.browser
+            opinion.browser_version = browser.browser_version
+            opinion.browser_platform = browser.platform
+            if browser.platform == 'Windows':
+                opinion.browser_platform += (' ' + browser.platform_version)
 
         # If there is an email address, stash it on this instance so
         # we can save it later in .save() and so it gets returned
@@ -700,20 +787,27 @@ def purge_data(cutoff=None, verbose=False):
     responses_to_update.update(objs.values_list('opinion_id', flat=True))
     count = objs.count()
     objs.delete()
-
-    if verbose:
-        print 'Purged %d feedback_responseemail records' % count
+    msg = 'feedback_responseemail: %d, ' % (count, )
 
     # Second, ResponseContext.
     objs = ResponseContext.objects.filter(opinion__created__lte=cutoff)
     responses_to_update.update(objs.values_list('opinion_id', flat=True))
     count = objs.count()
     objs.delete()
+    msg += 'feedback_responsecontext: %d, ' % (count, )
 
-    if verbose:
-        print 'Purged %d feedback_responsecontext records' % count
+    # Third, ResponsePI.
+    objs = ResponsePI.objects.filter(
+        opinion__created__lte=cutoff)
+    responses_to_update.update(objs.values_list('opinion_id', flat=True))
+    count = objs.count()
+    objs.delete()
+    msg += 'feedback_responsepi: %d' % (count, )
+
+    j_info(app='feedback',
+           src='purge_data',
+           action='purge_data',
+           msg=msg)
 
     if responses_to_update:
-        if verbose:
-            print '%d responses to re-index' % len(responses_to_update)
         index_chunk(ResponseMappingType, list(responses_to_update))

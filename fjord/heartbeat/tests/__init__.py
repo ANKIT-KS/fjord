@@ -1,15 +1,15 @@
+import time
+
 import factory
 
-from fjord.heartbeat.models import Answer, Poll
+from fjord.heartbeat.models import Answer, Survey
 
 
-class PollFactory(factory.DjangoModelFactory):
+class SurveyFactory(factory.DjangoModelFactory):
     class Meta:
-        model = Poll
+        model = Survey
 
-    slug = 'firefox-is-great'
-    description = ''
-    status = ''
+    name = 'survey123'
     enabled = True
 
 
@@ -17,13 +17,12 @@ class AnswerFactory(factory.DjangoModelFactory):
     class Meta:
         model = Answer
 
-    locale = 'en-US'
-    platform = 'Linux'
-    product = 'Firefox'
-    version = '30.0a1'
-    channel = 'stable'
+    experiment_version = '1'
+    response_version = 1
+    updated_ts = int(time.time())
+    survey_id = factory.SubFactory(SurveyFactory)
+    flow_id = 'flowabc'
+    question_id = 'questionabc'
 
-    extra = {}
-
-    poll = factory.SubFactory(PollFactory)
-    answer = '1'
+    # The rest of the fields aren't required and should have sane
+    # defaults.

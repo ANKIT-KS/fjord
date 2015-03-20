@@ -1,5 +1,7 @@
+import json
 from functools import wraps
 
+from django.core.exceptions import ObjectDoesNotExist
 from django.http import HttpResponseRedirect
 from django.shortcuts import render
 from django.utils import translation
@@ -9,10 +11,11 @@ from django.views.decorators.http import require_POST
 
 from mobility.decorators import mobile_template
 from statsd import statsd
+import waffle
 
 from fjord.base.browsers import UNKNOWN
 from fjord.base.urlresolvers import reverse
-from fjord.base.util import (
+from fjord.base.utils import (
     actual_ip_plus_context,
     ratelimit,
     smart_str,
@@ -21,7 +24,9 @@ from fjord.base.util import (
 from fjord.feedback import config
 from fjord.feedback import models
 from fjord.feedback.forms import ResponseForm
+from fjord.feedback.models import Response
 from fjord.feedback.utils import clean_url
+from fjord.feedback.config import TRUNCATE_LENGTH
 
 
 def happy_redirect(request):
@@ -42,7 +47,22 @@ def download_firefox(request, template):
 
 
 def thanks(request):
-    template = 'feedback/thanks.html'
+    if waffle.flag_is_active(request, 'thankyou'):
+        template = 'feedback/thanks.html'
+        try:
+            opinion_id = request.session.get('opinion_id')
+            user_opinion = Response.objects.get(id=opinion_id)
+        except Response.ObjectDoesNotExist:
+            pass
+        else:
+            word_count = len(user_opinion.description.split())
+            if (user_opinion.locale == 'en-US' and
+                    not user_opinion.happy and
+                    word_count >= 7):
+                template = 'feedback/thanks_sad.html'
+    else:
+        template = 'feedback/thanks.html'
+
     return render(request, template)
 
 
@@ -77,8 +97,7 @@ def _handle_feedback_post(request, locale=None, product=None,
 
     :arg request: request we're handling the post for
     :arg locale: locale specified in the url
-    :arg product: validated and sanitized product slug specified in
-        the url
+    :arg product: None or the Product
     :arg version: validated and sanitized version specified in the url
     :arg channel: validated and sanitized channel specified in the url
 
@@ -98,52 +117,18 @@ def _handle_feedback_post(request, locale=None, product=None,
     get_data = request.GET.copy()
 
     data = form.cleaned_data
+
     description = data.get('description', u'').strip()
     if not description:
         # If there's no description, then there's nothing to do here,
         # so thank the user and move on.
         return HttpResponseRedirect(reverse('thanks'))
 
-    # Do some data validation of product, channel and version
-    # coming from the url.
-    if product:
-        # If there was a product in the url, that's a product slug, so
-        # we map it to a db_name which is what we want to save to the
-        # db.
-        product = models.Product.get_product_map()[product]
-
-    # src, then source, then utm_source
-    source = get_data.pop('src', [u''])[0]
-    if not source:
-        source = get_data.pop('utm_source', [u''])[0]
-
-    campaign = get_data.pop('utm_campaign', [u''])[0]
-
-    # If the product came in on the url, then we only want to populate
-    # the platfrom from the user agent data iff the product specified
-    # by the url is the same as the browser product.
-    platform = u''
-    if product is None or product == request.BROWSER.browser:
-        # Most platforms aren't different enough between versions to care.
-        # Windows is.
-        platform = request.BROWSER.platform
-        if platform == 'Windows':
-            platform += ' ' + request.BROWSER.platform_version
-
-    product = product or u''
-
     opinion = models.Response(
         # Data coming from the user
         happy=data['happy'],
-        url=clean_url(data.get('url', u'')),
-        description=data['description'].strip(),
-
-        # Inferred data from user agent
-        prodchan=_get_prodchan(request, product, channel),
-        user_agent=request.META.get('HTTP_USER_AGENT', ''),
-        browser=request.BROWSER.browser,
-        browser_version=request.BROWSER.browser_version,
-        platform=platform,
+        url=clean_url(data.get('url', u'').strip()),
+        description=description,
 
         # Pulled from the form data or the url
         locale=data.get('locale', locale),
@@ -154,35 +139,71 @@ def _handle_feedback_post(request, locale=None, product=None,
         device=data.get('device', ''),
     )
 
+    # Add user_agent and inferred data.
+    user_agent = request.META.get('HTTP_USER_AGENT', '')
+    if user_agent:
+        browser = request.BROWSER
+
+        opinion.user_agent = user_agent
+        opinion.browser = browser.browser
+        opinion.browser_version = browser.browser_version
+        opinion.browser_platform = browser.platform
+        if browser.platform == 'Windows':
+            opinion.browser_platform += ' ' + browser.platform_version
+
+    # source is src or utm_source
+    source = (
+        get_data.pop('src', [u''])[0] or
+        get_data.pop('utm_source', [u''])[0]
+    )
     if source:
         opinion.source = source[:100]
 
+    campaign = get_data.pop('utm_campaign', [u''])[0]
     if campaign:
         opinion.campaign = campaign[:100]
 
+    platform = u''
+
     if product:
-        # If we picked up the product from the url, we use url
-        # bits for everything.
-        product = product or u''
-        version = version or u''
-        channel = channel or u''
-
-    elif opinion.browser != UNKNOWN:
-        # If we didn't pick up a product from the url, then we
-        # infer as much as we can from the user agent.
-        product = data.get(
-            'product', models.Response.infer_product(platform))
-        version = data.get(
-            'version', request.BROWSER.browser_version)
-        # Assume everything we don't know about is stable channel.
-        channel = u'stable'
-
+        # If we have a product at this point, then it came from the
+        # url and it's a Product instance and we need to turn it into
+        # the product.db_name which is a string.
+        product_db_name = product.db_name
     else:
-        product = channel = version = u''
+        # Check the POST data for the product.
+        product_db_name = data.get('product', '')
 
-    opinion.product = product or u''
+    # For the version, we try the url data, then the POST data.
+    version = version or data.get('version', '')
+
+    # At this point, we have a bunch of values, but we might be
+    # missing some values, too. We're going to cautiously infer data
+    # from the user agent where we're very confident it's appropriate
+    # to do so.
+    if request.BROWSER != UNKNOWN:
+        # If we don't have a product, try to infer that from the user
+        # agent information.
+        if not product_db_name:
+            product_db_name = models.Response.infer_product(request.BROWSER)
+
+        # If we have a product and it matches the user agent browser,
+        # then we can infer the version and platform from the user
+        # agent if they're missing.
+        if product_db_name:
+            product = models.Product.objects.get(db_name=product_db_name)
+            if product.browser and product.browser == request.BROWSER.browser:
+                if not version:
+                    version = request.BROWSER.browser_version
+                if not platform:
+                    platform = models.Response.infer_platform(
+                        product_db_name, request.BROWSER)
+
+    # Make sure values are at least empty strings--no Nones.
+    opinion.product = product_db_name or u''
     opinion.version = version or u''
     opinion.channel = channel or u''
+    opinion.platform = platform or u''
 
     opinion.save()
 
@@ -190,6 +211,35 @@ def _handle_feedback_post(request, locale=None, product=None,
     if data.get('email_ok') and data.get('email'):
         e = models.ResponseEmail(email=data['email'], opinion=opinion)
         e.save()
+        statsd.incr('feedback.emaildata.optin')
+
+    # If there's browser data, save that separately.
+    if data.get('browser_ok'):
+        # This comes in as a JSON string. Because we're using
+        # JSONObjectField, we need to convert it back to Python and
+        # then save it. This is kind of silly, but it does guarantee
+        # we have valid JSON.
+        try:
+            browser_data = data['browser_data']
+            browser_data = json.loads(browser_data)
+
+        except ValueError:
+            # Handles empty string and any non-JSON value.
+            statsd.incr('feedback.browserdata.badvalue')
+
+        except KeyError:
+            # Handles the case where it's missing from the data
+            # dict. If it's missing, we don't want to do anything
+            # including metrics.
+            pass
+
+        else:
+            # If browser_data isn't an empty dict, then save it.
+            if browser_data:
+                rti = models.ResponsePI(
+                    data=browser_data, opinion=opinion)
+                rti.save()
+                statsd.incr('feedback.browserdata.optin')
 
     if get_data:
         # There was extra context in the query string, so we grab that
@@ -211,38 +261,16 @@ def _handle_feedback_post(request, locale=None, product=None,
 
         context = models.ResponseContext(data=slop, opinion=opinion)
         context.save()
+        statsd.incr('feedback.contextdata.optin')
 
     if data['happy']:
         statsd.incr('feedback.happy')
     else:
         statsd.incr('feedback.sad')
 
+    request.session['opinion_id'] = opinion.id
+
     return HttpResponseRedirect(reverse('thanks'))
-
-
-def _get_prodchan(request, product=None, channel=None):
-    # FIXME - redo this to handle product/channel
-    meta = request.BROWSER
-
-    product = ''
-    platform = ''
-    channel = 'stable'
-
-    if meta.browser == 'Firefox':
-        product = 'firefox'
-    else:
-        product = 'unknown'
-
-    if meta.platform == 'Android':
-        platform = 'android'
-    elif meta.platform == 'Firefox OS':
-        platform = 'fxos'
-    elif product == 'firefox':
-        platform = 'desktop'
-    else:
-        platform = 'unknown'
-
-    return '{0}.{1}.{2}'.format(product, platform, channel)
 
 
 @csrf_protect
@@ -255,23 +283,13 @@ def generic_feedback(request, locale=None, product=None, version=None,
         return _handle_feedback_post(request, locale, product,
                                      version, channel)
 
+    bd = product.collect_browser_data_for(request.BROWSER.browser)
+
     return render(request, 'feedback/generic_feedback.html', {
         'form': form,
-    })
-
-
-@csrf_protect
-def generic_feedback_dev(request, locale, product, version=None, channel=None):
-    """IN DEVELOPMENT NEXT GENERATION GENERIC FEEDBACK FORM"""
-    form = ResponseForm()
-
-    if request.method == 'POST':
-        return _handle_feedback_post(request, locale, product,
-                                     version, channel)
-
-    return render(request, 'feedback/generic_feedback_dev.html', {
-        'form': form,
-        'product': models.Product.from_slug(product),
+        'product': product,
+        'collect_browser_data': bd,
+        'TRUNCATE_LENGTH': TRUNCATE_LENGTH,
     })
 
 
@@ -291,6 +309,7 @@ def firefox_os_stable_feedback(request, locale=None, product=None,
     return render(request, 'feedback/fxos_feedback.html', {
         'countries': countries,
         'devices': config.FIREFOX_OS_DEVICES,
+        'TRUNCATE_LENGTH': TRUNCATE_LENGTH,
     })
 
 
@@ -331,74 +350,27 @@ def android_about_feedback(request, locale=None):
 
 
 PRODUCT_OVERRIDE = {
-    'genericdev': generic_feedback_dev,
 }
 
 
-@csrf_exempt
-@never_cache
-def feedback_router_dev(request, product=None, version=None, channel=None,
-                        *args, **kwargs):
-    """DEV ONLY FEEDBACK ROUTER"""
-    view = None
+def persist_feedbackdev(fun):
+    """Persists a feedbackdev flag set via querystring in the cookies"""
+    @wraps(fun)
+    def _persist_feedbackdev(request, *args, **kwargs):
+        qs_feedbackdev = request.GET.get('feedbackdev', None)
+        resp = fun(request, *args, **kwargs)
+        if resp is not None and qs_feedbackdev is not None:
+            resp.set_cookie(
+                waffle.settings.COOKIE_NAME % 'feedbackdev',
+                qs_feedbackdev)
 
-    if '_type' in request.POST:
-        # Checks to see if `_type` is in the POST data and if so this
-        # is coming from Firefox for Android which doesn't know
-        # anything about csrf tokens. If that's the case, we send it
-        # to a view specifically for FfA Otherwise we pass it to one
-        # of the normal views, which enforces CSRF. Also, nix the
-        # product just in case we're crossing the streams and
-        # confusing new-style product urls with old-style backwards
-        # compatability for the Android form.
-        #
-        # FIXME: Remove this hairbrained monstrosity when we don't need to
-        # support the method that Firefox for Android currently uses to
-        # post feedback which worked with the old input.mozilla.org.
-
-        # This lets us measure how often this section of code kicks
-        # off and thus how often old android stuff is happening. When
-        # we're not seeing this anymore, we can nix all the old
-        # android stuff.
-        statsd.incr('feedback.oldandroid')
-
-        return android_about_feedback(request, request.locale)
-
-    product = smart_str(product, fallback=None)
-    # FIXME - validate these better
-    version = smart_str(version)
-    channel = smart_str(channel).lower()
-
-    if product == 'fxos' or request.BROWSER.browser == 'Firefox OS':
-        # Firefox OS gets shunted to a different form which has
-        # different Firefox OS specific questions.
-        view = firefox_os_stable_feedback
-        product = 'fxos'
-
-    elif product in PRODUCT_OVERRIDE:
-        # The "product" is really a specific form to use. So we None
-        # out the product and let that form view deal with everything.
-        view = PRODUCT_OVERRIDE[product]
-        product = None
-
-    elif product is None or product not in models.Product.get_product_map():
-        # The product wasn't specified or doesn't exist, so we spit
-        # out the product picker.
-        template = 'feedback/picker.html'
-
-        products = models.Product.objects.all()
-        return render(request, template, {
-            'products': products
-        })
-
-    view = view or generic_feedback_dev
-
-    return view(request, request.locale, product, version, channel,
-                *args, **kwargs)
+        return resp
+    return _persist_feedbackdev
 
 
 @csrf_exempt
 @never_cache
+@persist_feedbackdev
 def feedback_router(request, product=None, version=None, channel=None,
                     *args, **kwargs):
     """Determine a view to use, and call it.
@@ -444,6 +416,7 @@ def feedback_router(request, product=None, version=None, channel=None,
         return android_about_feedback(request, request.locale)
 
     # FIXME - validate these better
+    product = smart_str(product, fallback=None)
     version = smart_str(version)
     channel = smart_str(channel).lower()
 
@@ -453,21 +426,22 @@ def feedback_router(request, product=None, version=None, channel=None,
         view = firefox_os_stable_feedback
         product = 'fxos'
 
-    elif product:
-        product = smart_str(product)
+    elif product in PRODUCT_OVERRIDE:
+        # If the product is really a form name, we use that
+        # form specifically.
+        view = PRODUCT_OVERRIDE[product]
+        product = None
 
-        if product in PRODUCT_OVERRIDE:
-            # If the product is really a form name, we use that
-            # form specifically.
-            view = PRODUCT_OVERRIDE[product]
-            product = None
+    elif (product is None
+          or product not in models.Product.get_product_map()):
 
-        elif product not in models.Product.get_product_map():
-            # If they passed in a product and we don't know about
-            # it, stop here.
-            return render(request, 'feedback/unknownproduct.html', {
-                'product': product
-            })
+        picker_products = models.Product.objects.filter(
+            enabled=True, on_picker=True)
+        return render(request, 'feedback/picker.html', {
+            'products': picker_products
+        })
+
+    product = models.Product.from_slug(product)
 
     if view is None:
         view = generic_feedback

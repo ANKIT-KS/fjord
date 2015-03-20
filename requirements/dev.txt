@@ -1,0 +1,20 @@
+# These requirements are helpful, but not required, for working on fjord
+
+# sha256: KF6L1zDAtv374jwy0pNr_7pAHyPKsTLocixovoDW8YI
+flake8==2.2.5
+
+# sha256: PYypv2XFAU9GkYBUTR3Vu1ud9wmq1jBPnC5DcK4Ke3w
+mccabe==0.3
+
+# sha256: P6gKELNtUWhr93RPXcmWIs1cmM6O1kAi5imGiq_Bd2k
+pyflakes==0.8.1
+
+# sha256: VzZ3y4X_CJJEsPma-VX3bC43RWYyYQtt7aYWcTnOFVo
+pep8==1.6.1
+
+# For testing remote-troubleshooting capture.
+# sha256: Y6KG6ssDzV9kPX60WMbGK3DBEbRjT9jVnyfMrKS3yDo
+django-sslserver==0.14
+
+# sha256: ku47hrXBkhwtnawhe--JkMX4Usi8TZAYyv4PPzuBzTo
+nosenicedots==0.5

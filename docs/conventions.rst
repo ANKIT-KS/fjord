@@ -20,7 +20,7 @@ Git pre-commit hook
 We have a Git pre-commit hook that makes it easier to make sure you're
 checking in linted code. To set it up, run::
 
-    $ ./bin/hooks/flake8_lint.pre-commit
+    $ ./bin/hooks/lint.pre-commit
 
 That'll set up the pre-commit hook. After that, every time you commit
 something in Git, it'll run the hook first and if everything is fine
@@ -37,13 +37,16 @@ Follow `PEP-8 <http://python.org/dev/peps/pep-0008/>`_ for code and
 If you don't have an editor that checks PEP-8 issues and runs pyflakes
 for you, it's worth setting it up.
 
-Use the linting script in ``bin/flake8_lint.sh``.
+You can also use the linting script ``bin/flake8_lint.sh``::
+
+    $ ./bin/flake8_lint.sh <files-to-lint>
 
 
 JavaScript
 ----------
 
-Use `jshint <http://www.jshint.com/>`_ for JavaScript code.
+Use `jshint <http://www.jshint.com/>`_ for JavaScript code. This is
+automatically done in the pre-commit hook.
 
 Use `jsdoc <http://usejsdoc.org/>`_ for JavaScript function documentation.
 
@@ -193,8 +196,7 @@ Testing strings
 
 Fjord comes with ``bin/test_locales.sh`` script which makes it pretty
 easy to test that strings in the user interface are getting gettext'd.
-It creates a faux "Swedish Chef" translation of the strings in the
-`xx` locale.
+It creates a faux "Pirate" translation of the strings in the `xx` locale.
 
 You need to install polib for the script to work::
 

@@ -8,7 +8,6 @@ from django.contrib import messages
 from django.contrib.contenttypes.models import ContentType
 from django.http import (
     HttpResponse,
-    HttpResponseForbidden,
     HttpResponseRedirect
 )
 from django.shortcuts import get_object_or_404, render
@@ -19,13 +18,13 @@ from elasticutils.contrib.django import F, es_required_or_50x
 from mobility.decorators import mobile_template
 from tower import ugettext as _
 
-from fjord.analytics.tools import (
+from fjord.analytics.utils import (
     counts_to_options,
     zero_fill
 )
 from fjord.base.helpers import locale_name
 from fjord.base.urlresolvers import reverse
-from fjord.base.util import (
+from fjord.base.utils import (
     analyzer_required,
     check_new_user,
     smart_int,
@@ -65,21 +64,6 @@ def spot_translate(request, responseid):
 @mobile_template('analytics/{mobile/}response.html')
 def response_view(request, responseid, template):
     response = get_object_or_404(Response, id=responseid)
-
-    try:
-        prod = Product.objects.get(db_name=response.product)
-
-        if (not prod.on_dashboard
-                and (not request.user.is_authenticated()
-                     or not request.user.has_perm(
-                         'analytics.can_view_dashboard'))):
-
-            # If this is a response for a hidden product and the user
-            # isn't in the analytics group, then they can't see it.
-            return HttpResponseForbidden()
-
-    except Product.DoesNotExist:
-        pass
 
     mlt = None
     records = None
@@ -128,7 +112,7 @@ def generate_json_feed(request, search):
     }
     return HttpResponse(
         json.dumps(json_data, cls=JSONDatetimeEncoder),
-        mimetype='application/json')
+        content_type='application/json')
 
 
 def generate_atom_feed(request, search):
@@ -174,7 +158,7 @@ def generate_atom_feed(request, search):
             link_related=response.url_domain,
         )
     return HttpResponse(
-        feed.writeString('utf-8'), mimetype='application/atom+xml')
+        feed.writeString('utf-8'), content_type='application/atom+xml')
 
 
 def generate_dashboard_url(request, output_format='atom',
@@ -270,6 +254,11 @@ def dashboard(request):
     if search_date_start is None:
         search_date_start = search_date_end - timedelta(days=7)
 
+    # If the start and end dates are inverted, switch them into proper
+    # chronoligcal order
+    search_date_start, search_date_end = sorted(
+        [search_date_start, search_date_end])
+
     # Restrict the frontpage dashboard to only show the last 6 months
     # of data
     six_months_ago = date.today() - timedelta(days=180)
@@ -322,6 +311,7 @@ def dashboard(request):
     # Navigation facet data
     facets = search.facet(
         'happy', 'platform', 'locale', 'product', 'version',
+        size=1000,
         filtered=bool(search._process_filters(f.filters)))
 
     # This loop does two things. First it maps 'T' -> True and 'F' ->
@@ -335,6 +325,27 @@ def dashboard(request):
         'product': {},
         'version': {}
     }
+
+    happy_sad_filter = request.GET.get('happy', None)
+
+    if happy_sad_filter:
+        if happy_sad_filter == '1':
+            counts['happy'] = {True: 0}
+        elif happy_sad_filter == '0':
+            counts['happy'] = {False: 0}
+
+    if search_platform:
+        counts['platform'] = {search_platform: 0}
+
+    if search_locale:
+        counts['locale'] = {search_locale: 0}
+
+    if search_product:
+        counts['product'] = {search_product: 0}
+
+    if search_version:
+        counts['version'] = {search_version: 0}
+
     for param, terms in facets.facet_counts().items():
         for term in terms:
             name = term['term']
@@ -377,7 +388,7 @@ def dashboard(request):
     else:
         filter_data.append({
             'display': _('Version'),
-            'note': _('Select product to see version facet')
+            'note': _('Select product to see version breakdown')
         })
 
     filter_data.extend(
@@ -441,13 +452,9 @@ def dashboard(request):
     })
 
 
-@check_new_user
-def underconstruction(request):
-    return render(request, 'analytics/underconstruction.html')
-
-
 def generate_totals_histogram(search_date_start, search_date_end,
                               search_query, prod):
+    # Note: Not localized because it's ultra-alpha.
     search_date_start = search_date_start - timedelta(days=1)
 
     search = ResponseMappingType.search()
@@ -528,7 +535,7 @@ def generate_totals_histogram(search_date_start, search_date_end,
         },
         {
             'name': 'total',
-            'label': _('Total # responses'),
+            'label': 'Total # responses',
             'data': totals_data,
             'yaxis': 1,
             'lines': {'show': True, 'fill': False},
@@ -537,7 +544,7 @@ def generate_totals_histogram(search_date_start, search_date_end,
         },
         {
             'name': 'updeltas',
-            'label': _('Percent change in sentiment upwards'),
+            'label': 'Percent change in sentiment upwards',
             'data': up_deltas,
             'yaxis': 2,
             'bars': {'show': True, 'lineWidth': 3},
@@ -546,7 +553,7 @@ def generate_totals_histogram(search_date_start, search_date_end,
         },
         {
             'name': 'downdeltas',
-            'label': _('Percent change in sentiment downwards'),
+            'label': 'Percent change in sentiment downwards',
             'data': down_deltas,
             'yaxis': 2,
             'bars': {'show': True, 'lineWidth': 3},
@@ -559,6 +566,7 @@ def generate_totals_histogram(search_date_start, search_date_end,
 
 
 def product_dashboard_firefox(request, prod):
+    # Note: Not localized because it's ultra-alpha.
     template = 'analytics/product_dashboard_firefox.html'
     current_search = {}
 
@@ -674,6 +682,7 @@ def product_dashboard_firefox(request, prod):
 
 
 def product_dashboard_generic(request, prod):
+    # Note: Not localized because it's ultra-alpha.
     template = 'analytics/product_dashboard.html'
     current_search = {}
 

@@ -1,44 +1,29 @@
 # -*- coding: utf-8 -*-
-import datetime
-from south.db import db
-from south.v2 import SchemaMigration
-from django.db import models
+from __future__ import unicode_literals
+
+from django.db import models, migrations
 
 
-class Migration(SchemaMigration):
+class Migration(migrations.Migration):
 
-    def forwards(self, orm):
-        # Adding model 'Record'
-        db.create_table('search_record', (
-            ('id', self.gf('django.db.models.fields.AutoField')(primary_key=True)),
-            ('batch_id', self.gf('django.db.models.fields.CharField')(max_length=10)),
-            ('name', self.gf('django.db.models.fields.CharField')(max_length=255)),
-            ('creation_time', self.gf('django.db.models.fields.DateTimeField')(auto_now_add=True, blank=True)),
-            ('start_time', self.gf('django.db.models.fields.DateTimeField')(null=True)),
-            ('end_time', self.gf('django.db.models.fields.DateTimeField')(null=True)),
-            ('status', self.gf('django.db.models.fields.IntegerField')(default=0)),
-            ('message', self.gf('django.db.models.fields.CharField')(max_length=255, blank=True)),
-        ))
-        db.send_create_signal('search', ['Record'])
+    dependencies = [
+    ]
 
-
-    def backwards(self, orm):
-        # Deleting model 'Record'
-        db.delete_table('search_record')
-
-
-    models = {
-        'search.record': {
-            'Meta': {'object_name': 'Record'},
-            'batch_id': ('django.db.models.fields.CharField', [], {'max_length': '10'}),
-            'creation_time': ('django.db.models.fields.DateTimeField', [], {'auto_now_add': 'True', 'blank': 'True'}),
-            'end_time': ('django.db.models.fields.DateTimeField', [], {'null': 'True'}),
-            'id': ('django.db.models.fields.AutoField', [], {'primary_key': 'True'}),
-            'message': ('django.db.models.fields.CharField', [], {'max_length': '255', 'blank': 'True'}),
-            'name': ('django.db.models.fields.CharField', [], {'max_length': '255'}),
-            'start_time': ('django.db.models.fields.DateTimeField', [], {'null': 'True'}),
-            'status': ('django.db.models.fields.IntegerField', [], {'default': '0'})
-        }
-    }
-
-    complete_apps = ['search']
+    operations = [
+        migrations.CreateModel(
+            name='Record',
+            fields=[
+                ('id', models.AutoField(verbose_name='ID', serialize=False, auto_created=True, primary_key=True)),
+                ('batch_id', models.CharField(max_length=10)),
+                ('name', models.CharField(max_length=255)),
+                ('creation_time', models.DateTimeField(auto_now_add=True)),
+                ('start_time', models.DateTimeField(null=True)),
+                ('end_time', models.DateTimeField(null=True)),
+                ('status', models.IntegerField(default=0, choices=[(0, b'new'), (1, b'in progress'), (2, b'done - fail'), (3, b'done - success')])),
+                ('message', models.CharField(max_length=255, blank=True)),
+            ],
+            options={
+            },
+            bases=(models.Model,),
+        ),
+    ]

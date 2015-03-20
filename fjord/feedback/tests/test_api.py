@@ -1,11 +1,12 @@
+# -*- coding: utf-8 -*-
 import json
 import time
 from datetime import date, datetime, timedelta
 
-from django.core.cache import cache
+from django.core.cache import get_cache
 from django.test.client import Client
 
-from nose.tools import eq_
+from nose.tools import eq_, ok_
 
 from fjord.base.tests import TestCase, reverse
 from fjord.feedback import models
@@ -35,6 +36,54 @@ class PublicFeedbackAPITest(ElasticTestCase):
         json_data = json.loads(resp.content)
         eq_(json_data['count'], 3)
         eq_(len(json_data['results']), 3)
+
+    def test_id(self):
+        feedback = ResponseFactory()
+        self.refresh()
+
+        resp = self.client.get(reverse('feedback-api'), {'id': feedback.id})
+        json_data = json.loads(resp.content)
+        eq_(json_data['count'], 1)
+        eq_(len(json_data['results']), 1)
+        eq_(json_data['results'][0]['id'], feedback.id)
+
+    def test_multiple_ids(self):
+        # Create some responses that we won't ask for
+        for i in range(5):
+            feedback = ResponseFactory()
+
+        resps = []
+        for i in range(5):
+            feedback = ResponseFactory()
+            resps.append(feedback)
+
+        self.refresh()
+
+        resp = self.client.get(
+            reverse('feedback-api'),
+            {'id': ','.join([str(int(f.id)) for f in resps])}
+        )
+        json_data = json.loads(resp.content)
+        eq_(json_data['count'], 5)
+        eq_(len(json_data['results']), 5)
+        eq_(
+            sorted([item['id'] for item in json_data['results']]),
+            sorted([feedback.id for feedback in resps])
+        )
+
+    def test_junk_ids(self):
+        """Junk ids should just get ignored"""
+        feedback = ResponseFactory()
+        self.refresh()
+
+        resp = self.client.get(
+            reverse('feedback-api'),
+            {'id': str(feedback.id) + ',foo'}
+        )
+        json_data = json.loads(resp.content)
+        eq_(json_data['count'], 1)
+        eq_(len(json_data['results']), 1)
+        eq_(json_data['results'][0]['id'], feedback.id)
 
     def test_happy(self):
         self.create_basic_data()
@@ -120,88 +169,6 @@ class PublicFeedbackAPITest(ElasticTestCase):
         eq_(json_data['count'], 2)
         eq_(len(json_data['results']), 2)
 
-    def create_date_data(self):
-        """Create and send test data"""
-        testdata = [
-            ('2014-07-01', True, 'en-US', 'Firefox'),
-            ('2014-07-02', True, 'en-US', 'Firefox for Android'),
-            ('2014-07-03', False, 'de', 'Firefox'),
-            ('2014-07-04', False, 'de', 'Firefox for Android'),
-        ]
-        for date_start, happy, platform, product in testdata:
-            ResponseFactory(
-                happy=happy, platform=platform, product=product,
-                created=date_start)
-        self.refresh()
-
-    def _test_date(self, getoptions, expectedresponse):
-        """Helper method for tests"""
-        self.create_date_data()
-        resp = self.client.get(reverse('feedback-api'), getoptions)
-        json_data = json.loads(resp.content)
-        results = json_data['results']
-        eq_(len(json_data['results']), len(expectedresponse))
-        for result, expected in zip(results, expectedresponse):
-            eq_(result['created'], expected)
-
-    def test_date_start(self):
-        """date_start returns responses from that day forward"""
-        self._test_date(
-            {'date_start': '2014-07-02'},
-            ['2014-07-04T00:00:00', '2014-07-03T00:00:00',
-             '2014-07-02T00:00:00'])
-
-    def test_date_end(self):
-        """date_end returns responses from before that day"""
-        self._test_date(
-            {'date_end': '2014-07-03'},
-            ['2014-07-03T00:00:00', '2014-07-02T00:00:00',
-                '2014-07-01T00:00:00'])
-
-    def test_date_delta_with_date_end(self):
-        """Test date_delta filtering when date_end exists"""
-        self._test_date(
-            {'date_delta': '1d', 'date_end': '2014-07-03'},
-            ['2014-07-03T00:00:00', '2014-07-02T00:00:00'])
-
-    def test_date_delta_with_date_start(self):
-        """Test date_delta filtering when date_start exists"""
-        self._test_date(
-            {'date_delta': '1d', 'date_start': '2014-07-02'},
-            ['2014-07-03T00:00:00', '2014-07-02T00:00:00'])
-
-    def test_date_delta_with_date_end_and_date_start(self):
-        """When all three date fields are specified ignore date_start"""
-        self._test_date(
-            {'date_delta': '1d', 'date_end': '2014-07-03',
-             'date_start': '2014-07-02'},
-            ['2014-07-03T00:00:00', '2014-07-02T00:00:00'])
-
-    def test_date_delta_with_no_constraints(self):
-        """Test date_delta filtering without date_end or date_start"""
-        timeformatsuffix = 'T00:00:00'
-        today = (str(date.today()) + timeformatsuffix)
-        yesterday = (str(date.today() + timedelta(days=-1)) + timeformatsuffix)
-        beforeyesterday = (str(date.today() + timedelta(days=-2)) +
-                           timeformatsuffix)
-        testdata = [
-            (True, 'de', 'Firefox for Android', beforeyesterday),
-            (True, 'en-US', 'Firefox', yesterday),
-            (True, 'en-US', 'Firefox for Android', today)
-        ]
-        for happy, platform, product, date_start in testdata:
-            ResponseFactory(
-                happy=happy, platform=platform, product=product,
-                created=date_start)
-        self.refresh()
-        self._test_date({'date_delta': '1d'}, [today, yesterday])
-
-    def test_both_date_end_and_date_start_with_no_date_delta(self):
-        self._test_date(
-            {'date_start': '2014-07-02', 'date_end': '2014-07-03'},
-            ['2014-07-03T00:00:00', '2014-07-02T00:00:00']
-        )
-
     def test_old_responses(self):
         # Make sure we can't see responses from > 180 days ago
         cutoff = datetime.today() - timedelta(days=180)
@@ -255,6 +222,127 @@ class PublicFeedbackAPITest(ElasticTestCase):
         resp = self.client.get(reverse('feedback-api'), {'max': 'foo'})
         json_data = json.loads(resp.content)
         eq_(json_data['count'], 10)
+
+
+class PublicFeedbackAPIDateTest(ElasticTestCase):
+    # Get the YYYY-MM part of the date for last month. We use last
+    # month since arbitrarily appending the day will always create
+    # dates in the past.
+    last_month = str(date.today() - timedelta(days=31))[:7]
+
+    def create_data(self, days):
+        """Create response data for specified days
+
+        This creates the specified responses and also refreshes the
+        Elasticsearch index.
+
+        :arg days: List of day-of-month strings. For example
+            ``['01', '02', '03']``
+
+        """
+        for day in days:
+            ResponseFactory(created=self.last_month + '-' + day)
+        self.refresh()
+
+    def _test_date(self, params, expected):
+        """Helper method for tests"""
+        resp = self.client.get(reverse('feedback-api'), params)
+        json_data = json.loads(resp.content)
+        results = json_data['results']
+        eq_(len(json_data['results']), len(expected))
+        for result, expected in zip(results, expected):
+            eq_(result['created'], expected + 'T00:00:00')
+
+    def test_date_start(self):
+        """date_start returns responses from that day forward"""
+        self.create_data(['01', '02', '03', '04'])
+
+        self._test_date(
+            params={'date_start': self.last_month + '-02'},
+            expected=[
+                self.last_month + '-04',
+                self.last_month + '-03',
+                self.last_month + '-02'
+            ])
+
+    def test_date_end(self):
+        """date_end returns responses from before that day"""
+        self.create_data(['01', '02', '03', '04'])
+
+        self._test_date(
+            params={'date_end': self.last_month + '-03'},
+            expected=[
+                self.last_month + '-03',
+                self.last_month + '-02',
+                self.last_month + '-01'
+            ])
+
+    def test_date_delta_with_date_end(self):
+        """Test date_delta filtering when date_end exists"""
+        self.create_data(['01', '02', '03', '04'])
+
+        self._test_date(
+            params={'date_delta': '1d', 'date_end': self.last_month + '-03'},
+            expected=[
+                self.last_month + '-03',
+                self.last_month + '-02'
+            ])
+
+    def test_date_delta_with_date_start(self):
+        """Test date_delta filtering when date_start exists"""
+        self.create_data(['01', '02', '03', '04'])
+
+        self._test_date(
+            params={'date_delta': '1d', 'date_start': self.last_month + '-02'},
+            expected=[
+                self.last_month + '-03',
+                self.last_month + '-02'
+            ])
+
+    def test_date_delta_with_date_end_and_date_start(self):
+        """When all three date fields are specified ignore date_start"""
+        self.create_data(['01', '02', '03', '04'])
+
+        self._test_date(
+            params={
+                'date_delta': '1d',
+                'date_end': self.last_month + '-03',
+                'date_start': self.last_month + '-02'
+            },
+            expected=[
+                self.last_month + '-03',
+                self.last_month + '-02'
+            ])
+
+    def test_date_delta_with_no_constraints(self):
+        """Test date_delta filtering without date_end or date_start"""
+        today = str(date.today())
+        yesterday = str(date.today() + timedelta(days=-1))
+        beforeyesterday = str(date.today() + timedelta(days=-2))
+
+        for d in [beforeyesterday, yesterday, today]:
+            ResponseFactory(created=d)
+        self.refresh()
+
+        self._test_date(
+            params={'date_delta': '1d'},
+            expected=[
+                today,
+                yesterday
+            ])
+
+    def test_both_date_end_and_date_start_with_no_date_delta(self):
+        self.create_data(['01', '02', '03', '04'])
+
+        self._test_date(
+            params={
+                'date_start': self.last_month + '-02',
+                'date_end': self.last_month + '-03'
+            },
+            expected=[
+                self.last_month + '-03',
+                self.last_month + '-02'
+            ])
 
 
 class PostFeedbackAPITest(TestCase):
@@ -327,6 +415,33 @@ class PostFeedbackAPITest(TestCase):
             else:
                 eq_(getattr(feedback, field), data[field])
 
+    def test_invalid_unicode_url(self):
+        """Tests an API call with invalid unicode URL"""
+        data = {
+            'happy': True,
+            'description': u'Great!',
+            'category': u'ui',
+            'product': u'Firefox OS',
+            'channel': u'stable',
+            'version': u'1.1',
+            'platform': u'Firefox OS',
+            'locale': 'en-US',
+            'email': 'foo@example.com',
+            'url': 'தமிழகம்',
+            'manufacturer': 'OmniCorp',
+            'device': 'OmniCorp',
+            'country': 'US',
+            'user_agent': (
+                'Mozilla/5.0 (Mobile; rv:18.0) Gecko/18.0 Firefox/18.0'
+            ),
+            'source': 'email',
+            'campaign': 'email_test',
+        }
+        r = self.client.post(reverse('feedback-api'), data)
+        ok_(r.rendered_content.startswith('{"url": ["'))
+        ok_(r.rendered_content.endswith('is not a valid url"]}'))
+        eq_(r.status_code, 400)
+
     def test_with_email(self):
         data = {
             'happy': True,
@@ -375,7 +490,7 @@ class PostFeedbackAPITest(TestCase):
         eq_(r.status_code, 201)
 
         context = models.ResponseContext.objects.latest(field_name='id')
-        eq_(context.data, u'{"slopmenow": "bar"}')
+        eq_(context.data, {'slopmenow': 'bar'})
 
     def test_with_context_truncate_key(self):
         data = {
@@ -394,7 +509,7 @@ class PostFeedbackAPITest(TestCase):
         eq_(r.status_code, 201)
 
         context = models.ResponseContext.objects.latest(field_name='id')
-        eq_(context.data, u'{"foo01234567890123456": "bar"}')
+        eq_(context.data, {'foo01234567890123456': 'bar'})
 
     def test_with_context_truncate_value(self):
         data = {
@@ -413,7 +528,7 @@ class PostFeedbackAPITest(TestCase):
         eq_(r.status_code, 201)
 
         context = models.ResponseContext.objects.latest(field_name='id')
-        eq_(context.data, u'{"foo": "' + ('a' * 100) + '"}')
+        eq_(context.data, {'foo': ('a' * 100)})
 
     def test_with_context_20_pairs(self):
         data = {
@@ -434,7 +549,7 @@ class PostFeedbackAPITest(TestCase):
         eq_(r.status_code, 201)
 
         context = models.ResponseContext.objects.latest(field_name='id')
-        data = sorted(json.loads(context.data).items())
+        data = sorted(context.data.items())
         eq_(len(data), 20)
         eq_(data[0], ('foo00', '0'))
         eq_(data[-1], ('foo19', '19'))
@@ -468,40 +583,6 @@ class PostFeedbackAPITest(TestCase):
         r = self.client.post(reverse('feedback-api'), data)
         eq_(r.status_code, 400)
         assert 'email' in r.content
-
-    def test_composed_prodchan(self):
-        # Test with product and channel
-        data = {
-            'happy': True,
-            'description': u'Great!',
-            'product': u'Firefox OS',
-            'channel': u'stable',
-            'version': u'1.1',
-            'platform': u'Firefox OS',
-            'locale': 'en-US',
-        }
-
-        r = self.client.post(reverse('feedback-api'), data)
-        eq_(r.status_code, 201)
-
-        feedback = models.Response.uncached.latest(field_name='id')
-        eq_(feedback.prodchan, u'firefoxos.stable')
-
-        # Test with a product, but no channel
-        data = {
-            'happy': True,
-            'description': u'Great! Hazzah!',
-            'product': u'Firefox OS',
-            'version': u'1.1',
-            'platform': u'Firefox OS',
-            'locale': 'en-US',
-        }
-
-        r = self.client.post(reverse('feedback-api'), data)
-        eq_(r.status_code, 201)
-
-        feedback = models.Response.uncached.latest(field_name='id')
-        eq_(feedback.prodchan, u'firefoxos.unknown')
 
     # TODO: django-rest-framework 2.3.6 has a bug where BooleanField
     # has a default value of False, so "required=True" has no
@@ -629,10 +710,46 @@ class PostFeedbackAPITest(TestCase):
             eq_(r.status_code, 201,
                 msg=('%s != 201 (%s)' % (r.status_code, url)))
 
-            cache.clear()
+            get_cache('default').clear()
+
+    def test_user_agent_inferred_bits(self):
+        """Tests that we infer the right bits from the user-agent"""
+        data = {
+            'happy': True,
+            'description': u'Great!',
+            'category': u'ui',
+            'product': u'Firefox OS',
+            'channel': u'stable',
+            'version': u'1.1',
+            'platform': u'Firefox OS',
+            'locale': 'en-US',
+            'email': 'foo@example.com',
+            'url': 'http://example.com/',
+            'manufacturer': 'OmniCorp',
+            'device': 'OmniCorp',
+            'country': 'US',
+            'user_agent': (
+                'Mozilla/5.0 (Mobile; rv:18.0) Gecko/18.0 Firefox/18.0'
+            ),
+            'source': 'email',
+            'campaign': 'email_test',
+        }
+
+        r = self.client.post(reverse('feedback-api'), data)
+        eq_(r.status_code, 201)
+
+        feedback = models.Response.objects.latest(field_name='id')
+        eq_(feedback.browser, u'Firefox OS')
+        eq_(feedback.browser_version, u'1.0')
+        eq_(feedback.browser_platform, u'Firefox OS')
 
 
 class PostFeedbackAPIThrottleTest(TestCase):
+    def setUp(self):
+        super(TestCase, self).setUp()
+
+        get_cache('default').clear()
+
     def test_throttle(self):
         # We allow 50 posts per hour.
         throttle_trigger = 50
@@ -656,6 +773,11 @@ class PostFeedbackAPIThrottleTest(TestCase):
         # Now hit the api a fajillion times making sure things got
         # created
         for i in range(throttle_trigger):
+            # django-ratelimit fails the throttling if we hit the url
+            # a fajillion times in rapid succession. For now, we add
+            # a sleep which means this test takes 5 seconds now.
+            # FIXME: Look into this more for a better solution.
+            time.sleep(0.05)
             r = self.client.post(reverse('feedback-api'), data.next())
             eq_(r.status_code, 201)
 

@@ -1,3 +1,5 @@
+import json
+
 from django.contrib.auth.models import Group
 from django.test.utils import override_settings
 
@@ -48,7 +50,7 @@ class MonitorViewTest(ElasticTestCase):
                 SHOW_STAGE_NOTICE=True,
                 CACHES={
                     'default': {
-                        'BACKEND': 'caching.backends.memcached.CacheClass',
+                        'BACKEND': 'django.core.cache.backends.memcached.MemcachedCache',
                         'LOCATION': ['localhost:11211', 'localhost2:11211']
                         }
                     }):
@@ -77,15 +79,8 @@ class MonitorViewTest(ElasticTestCase):
         finally:
             views.test_memcached = test_memcached
 
-    @override_settings(SHOW_STAGE_NOTICE=True)
-    def test_500(self):
-        with self.assertRaises(IntentionalException) as cm:
-            self.client.get('/services/throw-error')
 
-        eq_(type(cm.exception), IntentionalException)
-
-
-class ErrorTesting(ElasticTestCase):
+class FileNotFoundTesting(TestCase):
     client_class = LocalizingClient
 
     def test_404(self):
@@ -94,11 +89,33 @@ class ErrorTesting(ElasticTestCase):
         self.assertTemplateUsed(request, '404.html')
 
 
+class ServerErrorTesting(TestCase):
+    @override_settings(SHOW_STAGE_NOTICE=True)
+    def test_500(self):
+        with self.assertRaises(IntentionalException) as cm:
+            self.client.get('/services/throw-error')
+
+        eq_(type(cm.exception), IntentionalException)
+
+
 class TestRobots(TestCase):
     def test_robots(self):
         resp = self.client.get('/robots.txt')
         eq_(resp.status_code, 200)
         self.assertTemplateUsed(resp, 'robots.txt')
+
+
+class TestContribute(TestCase):
+
+    def test_contribute(self):
+        resp = self.client.get('/contribute.json')
+        eq_(resp.status_code, 200)
+        self.assertTemplateUsed(resp, 'contribute.json')
+
+    def test_contribute_if_valid_json(self):
+        resp = self.client.get('/contribute.json')
+        # json.loads throws a ValueError when contribute.json is invalid JSON.
+        json.loads(resp.content)
 
 
 class TestNewUserView(ElasticTestCase):

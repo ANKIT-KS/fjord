@@ -67,7 +67,7 @@ def get_completion_data_for_file(fn):
         return 1
 
     for poentry in pofile:
-        if poentry.obsolete:
+        if poentry.obsolete or 'fuzzy' in poentry.flags:
             continue
 
         for occ in poentry.occurrences:
@@ -76,28 +76,34 @@ def get_completion_data_for_file(fn):
                 path = path[1]
             else:
                 path = 'vendor/' + path[2]
-            app_to_translations.setdefault(path, []).append(poentry.translated())
+            app_to_translations.setdefault(path, []).append(poentry)
 
     all_total = 0
     all_translated = 0
+    all_untranslated_words = 0
 
     data = {}
     for app, tr_list in app_to_translations.items():
         total = len(tr_list)
-        translated = len([tr for tr in tr_list if tr])
-
+        translated = len([tr for tr in tr_list if tr.translated()])
+        untranslated_words = sum(
+            [len(tr.msgid.split()) for tr in tr_list if not tr.translated()]
+        )
         data[app] = {
             'total': total,
             'translated': translated,
+            'untranslated_words': untranslated_words
         }
 
         all_total += total
         all_translated += translated
+        all_untranslated_words += untranslated_words
 
     return {
         lang: {
             'total': all_total,
             'translated': all_translated,
+            'untranslated_words': all_untranslated_words,
             'apps': data
         }
     }
@@ -129,7 +135,7 @@ def calculate_percents(data):
     if 'translated' in data and 'total' in data:
         total = float(data['total'])
         translated = float(data['translated'])
-        data['percent'] = int((100.00 / total) * translated)
+        data['percent'] = float(100.0 * translated / total)
 
     # traverse the tree to calculate additional percents
     for key, val in data.items():
@@ -173,12 +179,10 @@ def main(argv):
     locale_files = get_locale_files(locales_dir)
 
     # Generate completion data
-    data = [
-        {
-            'created': time.time(),
-            'locales': get_completion_data(locale_files)
-        }
-    ]
+    data = [{
+        'created': time.time(),
+        'locales': get_completion_data(locale_files)
+    }]
 
     if os.path.exists(output_file):
         with open(output_file, 'rb') as fp:
@@ -192,7 +196,7 @@ def main(argv):
         data = data[len(data) - options.truncate:]
 
     with open(output_file, 'wb') as fp:
-        json.dump(data, fp)
+        json.dump(data, fp, indent=2)
 
 
 if __name__ == '__main__':

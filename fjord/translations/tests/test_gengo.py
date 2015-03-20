@@ -362,6 +362,24 @@ class MachineTranslateTestCase(BaseGengoTestCase):
             # Make sure we don't call postTranslationJobs().
             eq_(gengo_mock_instance.postTranslationJobs.call_count, 0)
 
+    @guess_language('es')
+    def test_no_translate_if_disabled(self):
+        """No GengoAPI calls if gengosystem switch is disabled"""
+        with patch('fjord.translations.models.waffle') as waffle_mock:
+            waffle_mock.switch_is_active.return_value = False
+
+            with patch('fjord.translations.gengo_utils.Gengo') as GengoMock:
+                obj = SuperModel(locale='es', desc=u'Muy lento')
+                obj.save()
+
+                eq_(obj.trans_desc, u'')
+                translate(obj, 'gengo_machine', 'es', 'desc', 'en',
+                          'trans_desc')
+                eq_(obj.trans_desc, u'')
+
+                # We should not have used the API at all.
+                eq_(GengoMock.called, False)
+
 
 @override_settings(GENGO_PUBLIC_KEY='ou812', GENGO_PRIVATE_KEY='ou812')
 class HumanTranslationTestCase(BaseGengoTestCase):
@@ -381,6 +399,31 @@ class HumanTranslationTestCase(BaseGengoTestCase):
         eq_(obj.trans_desc, u'')
 
         eq_(len(GengoJob.objects.all()), 1)
+
+    @guess_language('es')
+    def test_no_translate_if_disabled(self):
+        """No GengoAPI calls if gengosystem switch is disabled"""
+        with patch('fjord.translations.models.waffle') as waffle_mock:
+            waffle_mock.switch_is_active.return_value = False
+
+            with patch('fjord.translations.gengo_utils.Gengo') as GengoMock:
+                # Note: This just sets up the GengoJob--it doesn't
+                # create any Gengo human translation jobs.
+                obj = SuperModel(
+                    locale='es',
+                    desc=u'Facebook no se puede enlazar con peru'
+                )
+                obj.save()
+
+                eq_(obj.trans_desc, u'')
+                translate(obj, 'gengo_human', 'es', 'desc', 'en', 'trans_desc')
+                eq_(obj.trans_desc, u'')
+
+                # Verify no jobs were created
+                eq_(len(GengoJob.objects.all()), 0)
+
+                # Verify we didn't call the API at all.
+                eq_(GengoMock.called, False)
 
     @guess_language('en')
     def test_translate_gengo_human_english_copy_over(self):
@@ -539,6 +582,7 @@ class HumanTranslationTestCase(BaseGengoTestCase):
             ght.push_translations()
 
             eq_(GengoOrder.objects.count(), 1)
+            # The "it's too low" email only.
             eq_(len(mail.outbox), 1)
 
         with patch('fjord.translations.gengo_utils.Gengo') as GengoMock:
@@ -569,7 +613,36 @@ class HumanTranslationTestCase(BaseGengoTestCase):
             ght.push_translations()
 
             eq_(GengoOrder.objects.count(), 1)
+            # This generates one more email.
             eq_(len(mail.outbox), 2)
+
+    @override_settings(
+        ADMINS=(('Jimmy Discotheque', 'jimmy@example.com'),),
+        GENGO_ACCOUNT_BALANCE_THRESHOLD=20.0
+    )
+    def test_gengo_daily_activities_warning(self):
+        """Tests warning email is sent"""
+        ght = GengoHumanTranslator()
+
+        with patch('fjord.translations.gengo_utils.Gengo') as GengoMock:
+            # FIXME: This returns the same thing both times, but to
+            # make the test "more kosher" we'd have this return two
+            # different order_id values.
+            mocker = GengoMock.return_value
+            mocker.getAccountBalance.return_value = {
+                u'opstat': u'ok',
+                u'response': {
+                    # Enough for one order, but dips below threshold
+                    # for the second one.
+                    u'credits': '30.00',
+                    u'currency': u'USD'
+                }
+            }
+
+            ght.run_daily_activities()
+
+            # The "balance is low warning" email only.
+            eq_(len(mail.outbox), 1)
 
 
 @override_settings(GENGO_PUBLIC_KEY='ou812', GENGO_PRIVATE_KEY='ou812')
@@ -734,11 +807,11 @@ class CompletedJobsForOrderTestCase(BaseGengoTestCase):
 
             ght.pull_translations()
 
-            jobs = GengoJob.uncached.all()
+            jobs = GengoJob.objects.all()
             eq_(len(jobs), 1)
             eq_(jobs[0].status, 'complete')
 
-            orders = GengoOrder.uncached.all()
+            orders = GengoOrder.objects.all()
             eq_(len(orders), 1)
             eq_(orders[0].status, 'complete')
 

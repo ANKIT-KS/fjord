@@ -14,6 +14,8 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from commander.deploy import task, hostgroups
 import commander_settings as settings
 
+PYTHON = getattr(settings, 'PYTHON_PATH', 'python2.6')
+
 
 @task
 def update_code(ctx, tag):
@@ -23,6 +25,13 @@ def update_code(ctx, tag):
         ctx.local('git checkout -f %s' % tag)
         ctx.local('git submodule sync')
         ctx.local('git submodule update --init --recursive')
+
+
+@task
+def update_product_details(ctx):
+    """Update mozilla product details"""
+    with ctx.lcd(settings.SRC_DIR):
+        ctx.local(PYTHON + " manage.py update_product_details -f")
 
 
 @task
@@ -49,40 +58,33 @@ def update_locales(ctx):
     # others can see what happened.
     with ctx.lcd(settings.SRC_DIR):
         ctx.local('date > media/postatus.txt')
-        ctx.local('bin/compile-linted-mo.sh | /usr/bin/tee -a media/postatus.txt')
-
-
-@task
-def update_abuse_training_data(ctx):
-    # NOTE: This is experimental training data loading for the
-    # spicedham prototype!
-    with ctx.lcd(settings.SRC_DIR):
-        ctx.local("python2.6 manage.py loaddata fjord/flags/fixtures/abuse_training.json")
+        ctx.local('bin/compile-linted-mo.sh -p %s | /usr/bin/tee -a media/postatus.txt' % PYTHON)
 
 
 @task
 def update_assets(ctx):
     with ctx.lcd(settings.SRC_DIR):
-        ctx.local("python2.6 manage.py collectstatic --noinput")
-        ctx.local("python2.6 manage.py compress_assets")
+        ctx.local(PYTHON + " manage.py collectstatic --noinput")
+        ctx.local(PYTHON + " manage.py compress_assets")
 
 
 @task
 def update_db(ctx):
-    """Update the database schema, if necessary.
-
-    Uses schematic by default. Change to south if you need to.
-
-    """
+    """Update the database schema, if necessary."""
     with ctx.lcd(settings.SRC_DIR):
-        ctx.local("python2.6 manage.py migrate --all")
+        ctx.local(PYTHON + " manage.py migrate --noinput")
 
 
 @task
 def update_cron(ctx):
     with ctx.lcd(settings.SRC_DIR):
-        ctx.local("python2.6 ./bin/crontab/gen-crons.py -w %s -s %s -u apache > /etc/cron.d/.%s" %
-                  (settings.WWW_DIR, settings.SRC_DIR, settings.CRON_NAME))
+        if getattr(settings, 'PYTHON_PATH', None) is not None:
+            # FIXME: Temporary until all servers have PYTHON_PATH.
+            ctx.local(PYTHON + " ./bin/crontab/gen-crons.py -p %s -w %s -s %s -u apache > /etc/cron.d/.%s" %
+                      (settings.PYTHON_PATH, settings.WWW_DIR, settings.SRC_DIR, settings.CRON_NAME))
+        else:
+            ctx.local(PYTHON + " ./bin/crontab/gen-crons.py -w %s -s %s -u apache > /etc/cron.d/.%s" %
+                      (settings.WWW_DIR, settings.SRC_DIR, settings.CRON_NAME))
         ctx.local("mv /etc/cron.d/.%s /etc/cron.d/%s" % (settings.CRON_NAME, settings.CRON_NAME))
 
 
@@ -115,6 +117,7 @@ def update_info(ctx):
         ctx.local('git log -3')
         ctx.local('git status')
         ctx.local('git submodule status')
+        ctx.local(PYTHON + " manage.py migrate --list")
         with ctx.lcd('locale'):
             ctx.local('svn info')
             ctx.local('svn status')
@@ -132,9 +135,9 @@ def pre_update(ctx, ref=settings.UPDATE_REF):
 @task
 def update(ctx):
     update_assets()
+    update_product_details()
     update_locales()
     update_db()
-    update_abuse_training_data()
 
 
 @task

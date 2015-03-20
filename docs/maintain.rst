@@ -53,13 +53,11 @@ system works.
 Good first bugs are denoted in Bugzilla with:
 
 * ``[good first bug]`` in the Whiteboard field
-* (for now) ``[mentor=xxx]`` in the Whiteboard field
 * a mentor listed in the Mentors field
 * a comment explaining the problem and what needs to be done to fix it
 
 Good next bugs are everything else and are denoted in Bugzilla with:
 
-* (for now) ``[mentor=xxx]`` in the Whiteboard field
 * a mentor listed in the Mentors field
 * a comment explaining the problem and what needs to be done to fix it
 
@@ -67,12 +65,33 @@ It's good to go through bugs once a month to see if any new bugs
 popped up that'd be good for contributors as well as for bugs that
 currently exist that probably should get closed out.
 
+Comment template::
+
+    <required skills>
+
+    <explanation of how to implement>
+
+    <note any wry twists>
+
+    Marking this as a mentored bug. If you're interested in working on it,
+    please read through our "Join this project" guide [1], complete the
+    list of things you need to do before contributing and then add a comment
+    to this bug asking to have it assigned to you.
+
+    If you have any questions, please ask on the mailing list or in the
+    #input channel on irc.mozilla.org.
+
+    [1] http://fjord.readthedocs.org/en/latest/welcome.html
+
+Once a week, go through any assigned mentored bugs and ping them to
+see how they're coming along.
+
 
 Adding support for a new product
 ================================
 
 To add support for a new product via product urls for the feedback form or the
-Input API, add a new entry to the Products table.
+Feedback API, add a new entry to the Products table.
 
 
 Adding a new locale
@@ -166,7 +185,6 @@ should be an exceedingly rare occurrence.
 If ``.po`` files have errors, then those errors are noted in the
 postatus.txt files:
 
-* dev: https://input-dev.allizom.org/media/postatus.txt
 * stage: https://input.allizom.org/media/postatus.txt
 * prod: https://input.mozilla.org/media/postatus.txt
 

@@ -1,37 +1,11 @@
 from django.contrib import admin
 
-from .models import Answer, Poll
+from .models import Survey
 
 
-class AnswerAdmin(admin.ModelAdmin):
-    list_display = (
-        'id',
-        'locale',
-        'platform',
-        'product',
-        'version',
-        'channel',
-        'extra',
-        'poll',
-        'answer',
-        'created'
-    )
-    list_filter = ('poll',)
+class SurveyAdmin(admin.ModelAdmin):
+    list_display = ('name', 'enabled', 'created', 'description')
+    list_filter = ('name', 'enabled', 'created')
 
 
-admin.site.register(Answer, AnswerAdmin)
-
-
-class PollAdmin(admin.ModelAdmin):
-    list_display = (
-        'id',
-        'slug',
-        'description',
-        'status',
-        'enabled',
-        'created',
-    )
-    list_filter = ('enabled',)
-
-
-admin.site.register(Poll, PollAdmin)
+admin.site.register(Survey, SurveyAdmin)

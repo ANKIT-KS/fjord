@@ -7,9 +7,6 @@
 [submodule "vendor/src/django-browserid"]
 	path = vendor/src/django-browserid
 	url = https://github.com/mozilla/django-browserid.git
-[submodule "vendor/src/django-cache-machine"]
-	path = vendor/src/django-cache-machine
-	url = https://github.com/jbalogh/django-cache-machine.git
 [submodule "vendor/src/django-eadred"]
 	path = vendor/src/django-eadred
 	url = https://github.com/willkg/django-eadred.git
@@ -46,9 +43,6 @@
 [submodule "vendor/src/django-mobility"]
 	path = vendor/src/django-mobility
 	url = git://github.com/jbalogh/django-mobility.git
-[submodule "vendor/src/django-mozilla-product-details"]
-	path = vendor/src/django-mozilla-product-details
-	url = git://github.com/fwenzel/django-mozilla-product-details
 [submodule "vendor/src/django-multidb-router"]
 	path = vendor/src/django-multidb-router
 	url = git://github.com/jbalogh/django-multidb-router.git
@@ -67,15 +61,9 @@
 [submodule "vendor/src/jingo-minify"]
 	path = vendor/src/jingo-minify
 	url = git://github.com/jsocol/jingo-minify.git
-[submodule "vendor/src/nuggets"]
-	path = vendor/src/nuggets
-	url = git://github.com/mozilla/nuggets.git
 [submodule "vendor/src/tower"]
 	path = vendor/src/tower
 	url = git://github.com/clouserw/tower.git
-[submodule "vendor/src/django_compressor"]
-	path = vendor/src/django_compressor
-	url = https://github.com/jezdez/django_compressor.git
 [submodule "vendor/src/kombu"]
 	path = vendor/src/kombu
 	url = git://github.com/celery/kombu.git
@@ -106,6 +94,9 @@
 [submodule "vendor/src/django-waffle"]
 	path = vendor/src/django-waffle
 	url = https://github.com/jsocol/django-waffle.git
-[submodule "vendor/src/spicedham"]
-	path = vendor/src/spicedham
-	url = http://github.com/mozilla/spicedham
+[submodule "vendor/src/django-product-details"]
+	path = vendor/src/django-product-details
+	url = https://github.com/mozilla/django-product-details.git
+[submodule "vendor/src/django-sslserver"]
+	path = vendor/src/django-sslserver
+	url = https://github.com/teddziuba/django-sslserver.git

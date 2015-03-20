@@ -128,8 +128,8 @@
 
 <div class="col wide">
 {% block content_middle %}
-  {% if selected != '1d' %}
-    <div class="block graph">
+  {% if (user.is_authenticated() and user.has_perm('analytics.can_view_dashboard')) %}
+    <div class="block graph secret">
       {# A graph will be dynamically inserted in these divs by Flot. #}
       <div class="histogram" data-histogram="{{ histogram|to_json }}"></div>
       <div class="legend"></div>
@@ -138,7 +138,7 @@
   {% endif %}
 
   <div class="block feedback">
-    <h2>{{ _('Latest Feedback') }}</h2>
+    <h2>{{ _('Feedback') }}</h2>
 
     <form id="feedback_search" action="{{ request.get_full_path() }}" method="get">
       <input class="search_box" type="text" name="q"

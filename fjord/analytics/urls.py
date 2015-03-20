@@ -1,6 +1,10 @@
 from django.conf.urls import patterns, url
 
-from fjord.analytics.analyzer_views import ProductsUpdateView
+from fjord.analytics.analyzer_views import (
+    ProductsUpdateView,
+    SurveyCreateView,
+    SurveyUpdateView,
+)
 
 
 urlpatterns = patterns(
@@ -20,9 +24,6 @@ urlpatterns = patterns(
     # Translate a specific response
     url(r'^dashboard/translate/(?P<responseid>\d+)/?$',
         'spot_translate', name='spot_translate'),
-
-    # Temporary!: The under construction view
-    url(r'^underc/?$', 'underconstruction', name='underconstruction'),
 )
 
 # These are analyzer-group only views.
@@ -42,8 +43,11 @@ urlpatterns += patterns(
         name='analytics_hourly_histogram'),
     url(r'^analytics/duplicates/?$', 'analytics_duplicates',
         name='analytics_duplicates'),
-    url(r'^analytics/hb/?$', 'analytics_hb',
-        name='analytics_hb'),
-    url(r'^analytics/flagged/?$', 'analytics_flagged',
-        name='analytics_flagged'),
+    url(r'^analytics/hbdata(?:/(?P<answerid>\d+))?/?$', 'hb_data',
+        name='hb_data'),
+    url(r'^analytics/hberrorlog(?:/(?P<errorid>\d+))?/?$', 'hb_errorlog',
+        name='hb_errorlog'),
+    url(r'^analytics/hbsurveys/?$', SurveyCreateView.as_view(), name='hb_surveys'),
+    url(r'^analytics/hbsurveys/(?P<pk>\d+)/update/$', SurveyUpdateView.as_view(),
+        name='hb_surveys_update'),
 )

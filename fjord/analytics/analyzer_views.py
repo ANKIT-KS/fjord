@@ -16,22 +16,29 @@
 
 from collections import defaultdict
 from datetime import date, datetime, timedelta
+from pprint import pformat
 import csv
 
 from elasticutils.contrib.django import F, es_required_or_50x
 
+from django.core.paginator import Paginator, PageNotAnInteger, EmptyPage
+from django.core.urlresolvers import reverse_lazy
 from django.http import HttpResponse
 from django.shortcuts import get_object_or_404, render
 from django.utils.encoding import force_bytes
-from django.views.generic.edit import FormView
+from django.views.generic.edit import FormView, CreateView, UpdateView
 from django.utils.decorators import method_decorator
 
-from fjord.analytics.forms import OccurrencesComparisonForm, ProductsUpdateForm
-from fjord.analytics.tools import (
+from fjord.analytics.forms import (
+    OccurrencesComparisonForm,
+    ProductsUpdateForm,
+    SurveyCreateForm
+)
+from fjord.analytics.utils import (
     counts_to_options,
     zero_fill)
 from fjord.base.helpers import locale_name
-from fjord.base.util import (
+from fjord.base.utils import (
     analyzer_required,
     check_new_user,
     smart_int,
@@ -40,9 +47,104 @@ from fjord.base.util import (
 )
 from fjord.feedback.helpers import country_name
 from fjord.feedback.models import Product, Response, ResponseMappingType
-from fjord.heartbeat.models import Answer as HBAnswer
-from fjord.heartbeat.models import Poll as HBPoll
+from fjord.heartbeat.models import Answer, Survey
+from fjord.journal.models import Record
 from fjord.search.utils import es_error_statsd
+
+
+@check_new_user
+@analyzer_required
+def hb_data(request, answerid=None):
+    """View for hb data that shows one or all of the answers"""
+    VALID_SORTBY_FIELDS = ('id', 'received_ts', 'updated_ts')
+
+    sortby = 'id'
+    answer = None
+    answers = []
+    survey = None
+    showdata = None
+
+    if answerid is not None:
+        answer = Answer.objects.get(id=answerid)
+
+    else:
+        sortby = request.GET.get('sortby', sortby)
+        if sortby not in VALID_SORTBY_FIELDS:
+            sortby = 'id'
+
+        page = request.GET.get('page')
+        answers = Answer.objects.order_by('-' + sortby)
+        survey = request.GET.get('survey', survey)
+        showdata = request.GET.get('showdata', None)
+
+        if showdata:
+            if showdata == 'test':
+                answers = answers.filter(is_test=True)
+            elif showdata == 'notest':
+                answers = answers.exclude(is_test=True)
+            else:
+                showdata = 'all'
+        else:
+            showdata = 'all'
+
+        if survey:
+            try:
+                survey = Survey.objects.get(id=survey)
+                answers = answers.filter(survey_id=survey)
+            except Survey.DoesNotExist:
+                survey = None
+
+        paginator = Paginator(answers, 100)
+        try:
+            answers = paginator.page(page)
+        except PageNotAnInteger:
+            answers = paginator.page(1)
+        except EmptyPage:
+            answers = paginator.page(paginator.num_pages)
+
+    def fix_ts(ts):
+        ts = float(ts / 1000)
+        return datetime.fromtimestamp(ts)
+
+    return render(request, 'analytics/analyzer/hb_data.html', {
+        'sortby': sortby,
+        'answer': answer,
+        'answers': answers,
+        'fix_ts': fix_ts,
+        'pformat': pformat,
+        'survey': survey,
+        'surveys': Survey.objects.all(),
+        'showdata': showdata,
+    })
+
+
+
+@check_new_user
+@analyzer_required
+def hb_errorlog(request, errorid=None):
+    """View for hb errorlog that shows one or all of the errors"""
+    error = None
+    errors = []
+
+    if errorid is not None:
+        error = Record.objects.get(id=errorid)
+
+    else:
+        page = request.GET.get('page')
+        paginator = Paginator(
+            Record.objects.filter(app='heartbeat').order_by('-id'), 100)
+        try:
+            errors = paginator.page(page)
+        except PageNotAnInteger:
+            errors = paginator.page(1)
+        except EmptyPage:
+            errors = paginator.page(paginator.num_pages)
+
+    return render(request, 'analytics/analyzer/hb_errorlog.html', {
+        'error': error,
+        'errors': errors,
+        'pformat': pformat
+    })
 
 
 @check_new_user
@@ -51,17 +153,6 @@ def analytics_dashboard(request):
     """Main page for analytics related things"""
     template = 'analytics/analyzer/dashboard.html'
     return render(request, template)
-
-
-@check_new_user
-@analyzer_required
-def analytics_products(request):
-    """Products list view"""
-    template = 'analytics/analyzer/products.html'
-    products = Product.objects.all()
-    return render(request, template, {
-        'products': products
-    })
 
 
 @check_new_user
@@ -121,7 +212,6 @@ def analytics_occurrences(request):
                 # in the backend.
                 first_params['date_start'] = '2013-01-01'
 
-            # Have to do raw because we want a size > 10.
             first_resp_s = first_resp_s.facet('description_bigrams',
                                               size=30, filtered=True)
             first_resp_s = first_resp_s[0:0]
@@ -480,8 +570,8 @@ def analytics_search(request):
         'organic': {},
     }
     facets = search.facet(*(counts.keys()),
-                          filtered=bool(search._process_filters(f.filters)),
-                          size=25)
+                          size=1000,
+                          filtered=bool(search._process_filters(f.filters)))
 
     for param, terms in facets.facet_counts().items():
         for term in terms:
@@ -602,20 +692,6 @@ def analytics_search(request):
 
 @check_new_user
 @analyzer_required
-def analytics_hb(request):
-    """Shows HB data"""
-    template = 'analytics/analyzer/hb.html'
-    hb_polls = HBPoll.objects.filter(enabled=True)
-    hb_data = HBAnswer.objects.order_by('-created')[:100]
-
-    return render(request, template, {
-        'hb_polls': hb_polls,
-        'hb_data': hb_data
-    })
-
-
-@check_new_user
-@analyzer_required
 @es_required_or_50x(error_template='analytics/es_down.html')
 @es_error_statsd
 def analytics_hourly_histogram(request):
@@ -683,7 +759,7 @@ class ProductsUpdateView(FormView):
 
     def get_context_data(self, **kwargs):
         context = super(ProductsUpdateView, self).get_context_data(**kwargs)
-        context['products'] = Product.uncached.all()
+        context['products'] = Product.objects.all()
         return context
 
     def get_form_kwargs(self):
@@ -701,93 +777,63 @@ class ProductsUpdateView(FormView):
             instance.notes = form.data.get('notes') or instance.notes
             instance.enabled = form.data.get('enabled') or False
             instance.on_dashboard = form.data.get('on_dashboard') or False
+            instance.on_picker = form.data.get('on_picker') or False
+            instance.browser = form.data.get('browser') or u''
+            instance.browser_data_browser = form.data.get('browser_data_browser') or u''
             self.object = instance.save()
         except Product.DoesNotExist:
             self.object = form.save()
         return super(ProductsUpdateView, self).form_valid(form)
 
+class SurveyCreateView(CreateView):
+    model = Survey
+    template_name = 'analytics/analyzer/hb_surveys.html'
+    success_url = reverse_lazy('hb_surveys')
+    form_class = SurveyCreateForm
 
-@check_new_user
-@analyzer_required
-def analytics_flagged(request):
-    """View showing responses with flags
+    @method_decorator(check_new_user)
+    @method_decorator(analyzer_required)
+    def dispatch(self, *args, **kwargs):
+        return super(SurveyCreateView, self).dispatch(*args, **kwargs)
 
-    NOTE: This is not permanent and might go away depending on how the
-    spicedham prototype works.
+    def get_context_data(self, **kwargs):
+        context = super(SurveyCreateView, self).get_context_data(**kwargs)
+        page = self.request.GET.get('page')
+        paginator = Paginator(Survey.objects.order_by('-created'), 25)
+        try:
+            surveys = paginator.page(page)
+        except PageNotAnInteger:
+            surveys = paginator.page(1)
+        except EmptyPage:
+            surveys = paginator.page(paginator.num_pages)
 
-    """
-    template = 'analytics/analyzer/flags.html'
+        context['surveys'] = surveys
+        context['update'] = False
+        return context
 
-    # FIXME: Importing this here so all the changes are localized to
-    # this function.  If we decide to go forward with this, we should
-    # unlocalize it.
 
-    from django.contrib import messages
-    from django.core.paginator import Paginator, EmptyPage, PageNotAnInteger
-    from django.http import HttpResponseRedirect
+class SurveyUpdateView(UpdateView):
+    model = Survey
+    template_name = 'analytics/analyzer/hb_surveys.html'
+    success_url = reverse_lazy('hb_surveys')
+    form_class = SurveyCreateForm
 
-    from fjord.flags.models import Flag
+    @method_decorator(check_new_user)
+    @method_decorator(analyzer_required)
+    def dispatch(self, *args, **kwargs):
+        return super(SurveyUpdateView, self).dispatch(*args, **kwargs)
 
-    if request.method == 'POST':
-        flag_action = request.POST.get('flag')
-        if flag_action:
-            # We do some shenanigans here to make sure we're fetching
-            # and operating on a flag_set that's not
-            # cached. django-cache-machine doesn't invalidate m2m
-            # queries correctly. :(
-            resp = get_object_or_404(
-                Response, pk=smart_int(request.POST['id']))
-            flag = get_object_or_404(Flag, name=flag_action)
+    def get_context_data(self, **kwargs):
+        context = super(SurveyUpdateView, self).get_context_data(**kwargs)
+        page = self.request.GET.get('page')
+        paginator = Paginator(Survey.objects.order_by('-created'), 25)
+        try:
+            surveys = paginator.page(page)
+        except PageNotAnInteger:
+            surveys = paginator.page(1)
+        except EmptyPage:
+            surveys = paginator.page(paginator.num_pages)
 
-            resp_flags = dict([(f.name, f)
-                               for f in resp.flag_set.no_cache().all()])
-            if flag.name in resp_flags:
-                del resp_flags[flag.name]
-                messages.success(request, 'removed %s flag from %d' % (
-                    flag_action, resp.id))
-            else:
-                resp_flags[flag.name] = flag
-                messages.success(request, 'added %s flag from %d' % (
-                    flag_action, resp.id))
-
-            resp.flag_set.clear()
-            resp.flag_set.add(*resp_flags.values())
-            return HttpResponseRedirect(request.get_full_path())
-
-    resp_filter = smart_str(request.GET.get('filter'))
-
-    # Only look at en-US locale responses since Monday September 8th,
-    # 2014 we pushed the integration code out.
-    response_list = (Response.uncached
-                     .filter(locale=u'en-US')
-                     .filter(created__gte='2014-09-08'))
-
-    counts = {
-        'total': response_list.count(),
-        'abuse': response_list.filter(flag__name='abuse').count(),
-        'abuse-wrong': response_list.filter(flag__name='abuse-wrong').count(),
-        'false-positive': (response_list
-                           .filter(flag__name='abuse')
-                           .filter(flag__name='abuse-wrong').count()),
-    }
-    counts['false-negative'] = (
-        counts['abuse-wrong'] - counts['false-positive']
-    )
-
-    if resp_filter:
-        response_list = response_list.filter(flag__name=resp_filter)
-
-    paginator = Paginator(response_list, 50)
-
-    page = request.GET.get('page')
-    try:
-        responses = paginator.page(page)
-    except PageNotAnInteger:
-        responses = paginator.page(1)
-    except EmptyPage:
-        responses = paginator.page(paginator.num_pages)
-
-    return render(request, template, {
-        'counts': counts,
-        'responses': responses
-    })
+        context['surveys'] = surveys
+        context['update'] = True
+        return context

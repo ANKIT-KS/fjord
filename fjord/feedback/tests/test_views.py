@@ -5,13 +5,10 @@ from django.test.client import RequestFactory
 from django.test.utils import override_settings
 
 from nose.tools import eq_
-from mock import NonCallableMock
 
-from fjord.base.browsers import parse_ua
-from fjord.base.tests import TestCase, LocalizingClient, reverse
+from fjord.base.tests import TestCase, LocalizingClient, reverse, with_waffle
 from fjord.feedback import models
 from fjord.feedback.tests import ProductFactory
-from fjord.feedback.views import _get_prodchan
 
 
 class TestRedirectFeedback(TestCase):
@@ -26,34 +23,6 @@ class TestRedirectFeedback(TestCase):
         self.assertRedirects(r, reverse('feedback') + '#sad')
 
 
-class TestPicker(TestCase):
-    client_class = LocalizingClient
-
-    def test_picker_no_products(self):
-        # FIXME: We can nix this when we stop doing data migrations in
-        # test setup.
-        models.Product.objects.all().delete()
-
-        resp = self.client.get(reverse('feedback_dev'))
-
-        eq_(resp.status_code, 200)
-        self.assertTemplateUsed(resp, 'feedback/picker.html')
-
-    def test_picker_with_products(self):
-        ProductFactory(display_name=u'ProductFoo', slug=u'productfoo')
-        ProductFactory(display_name=u'ProductBar', slug=u'productbar')
-
-        cache.clear()
-
-        resp = self.client.get(reverse('feedback_dev'))
-
-        eq_(resp.status_code, 200)
-        self.assertContains(resp, 'ProductFoo')
-        self.assertContains(resp, 'productfoo')
-        self.assertContains(resp, 'ProductBar')
-        self.assertContains(resp, 'productbar')
-
-
 class TestFeedback(TestCase):
     client_class = LocalizingClient
 
@@ -64,7 +33,7 @@ class TestFeedback(TestCase):
         """
         amount = models.Response.objects.count()
 
-        url = reverse('feedback')
+        url = reverse('feedback', args=(u'firefox',))
         r = self.client.post(url, {
             'happy': 1,
             'description': u'Firefox rocks!',
@@ -83,7 +52,6 @@ class TestFeedback(TestCase):
         eq_(u'en-US', feedback.locale)
         # Note: This comes from the user agent from the LocalizingClient
         eq_(u'Firefox', feedback.product)
-        eq_(u'stable', feedback.channel)
         eq_(u'14.0.1', feedback.version)
 
         # Make sure it doesn't create an email record
@@ -92,6 +60,21 @@ class TestFeedback(TestCase):
         # Make sure it doesn't create a context record
         eq_(models.ResponseContext.objects.count(), 0)
 
+    def test_opinion_id_in_session(self):
+        """Test that the opinion ID is in the session."""
+
+        url = reverse('feedback', args=(u'firefox',))
+        self.client.post(url, {
+            'happy': 1,
+            'description': u'Firefox rocks!',
+            'url': u'http://mozilla.org/'
+        })
+        opinion = models.Response.objects.order_by('-id')[0]
+
+        # Make sure that the ID has been saved to the user's session
+        eq_(self.client.session['opinion_id'], opinion.id)
+
+
     def test_valid_sad(self):
         """Submitting a valid sad form creates an item in the DB.
 
@@ -99,7 +82,7 @@ class TestFeedback(TestCase):
         """
         amount = models.Response.objects.count()
 
-        url = reverse('feedback')
+        url = reverse('feedback', args=(u'firefox',))
         r = self.client.post(url, {
             'happy': 0,
             'description': u"Firefox doesn't make me sandwiches. :("
@@ -117,8 +100,71 @@ class TestFeedback(TestCase):
         eq_(u'en-US', feedback.locale)
         # Note: This comes from the user agent from the LocalizingClient
         eq_(u'Firefox', feedback.product)
-        eq_(u'stable', feedback.channel)
         eq_(u'14.0.1', feedback.version)
+
+    @with_waffle('thankyou', True)
+    def test_use_thank_you_sad(self):
+        """Thanks_sad template is used when appropriate"""
+        url = reverse('feedback', args=(u'firefox',), locale='en-US')
+        r = self.client.post(url, {
+            'happy': 0,
+            'description': u"I want to know why Firefox doesn't make me sandwiches!",
+        }, follow=True)
+
+        feedback = models.Response.objects.latest(field_name='id')
+        eq_(u"I want to know why Firefox doesn't make me sandwiches!", feedback.description)
+        eq_(u'', feedback.url)
+        eq_(False, feedback.happy)
+        eq_(u'en-US', feedback.locale)
+        eq_(r.status_code, 200)
+        self.assertTemplateUsed(r, 'feedback/thanks_sad.html')
+
+    @with_waffle('thankyou', True)
+    def test_use_default_thank_you_words(self):
+        """Default thank you page is used when descirption is under 7 words"""
+        url = reverse('feedback', args=(u'firefox',), locale='en-US')
+        r = self.client.post(url, {
+            'happy': 0,
+            'description': u"Why doesn't it load?",
+        }, follow=True)
+
+        feedback = models.Response.objects.latest(field_name='id')
+        eq_(u'', feedback.url)
+        eq_(r.status_code, 200)
+        self.assertTemplateUsed(r, 'feedback/thanks.html')
+
+    @with_waffle('thankyou', True)
+    def test_use_default_thank_you_happy(self):
+        """Default thank you page is used when the feedback is happy."""
+        url = reverse('feedback', args=(u'firefox',), locale='en-US')
+        r = self.client.post(url, {
+            'happy': 1,
+            'description': u"Firefox is the best browser I've ever used!",
+        }, follow=True)
+
+        feedback = models.Response.objects.latest(field_name='id')
+        eq_(True, feedback.happy)
+        eq_(r.status_code, 200)
+        self.assertTemplateUsed(r, 'feedback/thanks.html')
+
+    @override_settings(DEV_LANGUAGES=('en-US', 'es'))
+    @with_waffle('thankyou', True)
+    def test_use_default_thank_you_locale(self):
+        """Default thank you page is used when the locale is not en-US"""
+        try:
+            url = reverse('feedback', args=(u'firefox',), locale='es')
+            r = self.client.post(url, {
+                'happy': 0,
+                'description': u'Tell me why Firefox is not making lunch.',
+            }, follow=True)
+
+            self.assertRedirects(r, reverse('thanks'))
+            feedback = models.Response.objects.latest(field_name='id')
+            eq_(u'es', feedback.locale)
+            self.assertTemplateUsed(r, 'feedback/thanks.html')
+
+        finally:
+            r = self.client.get('/en-US/feedback/')
 
     def test_firefox_os_view(self):
         """Firefox OS returns correct view"""
@@ -145,20 +191,14 @@ class TestFeedback(TestCase):
         r = self.client.get(url, HTTP_USER_AGENT=ua)
         self.assertTemplateUsed(r, 'feedback/fxos_feedback.html')
 
-    def test_generic_dev_view(self):
-        # FIXME: Remove this when the dev view lands.
-        url = reverse('feedback_dev', args=('firefox',))
-        resp = self.client.get(url)
-        self.assertTemplateUsed(resp, 'feedback/generic_feedback_dev.html')
-
     @override_settings(DEV_LANGUAGES=('en-US', 'es'))
     def test_urls_locale(self):
         """Test setting locale from the locale part of the url"""
         try:
-            count = models.Response.uncached.count()
+            count = models.Response.objects.count()
 
             # Hard-coded url so we're guaranteed to get /es/.
-            url = '/es/feedback'
+            url = reverse('feedback', args=(u'firefox',), locale='es')
             resp = self.client.post(url, {
                 'happy': 1,
                 'description': u'Firefox rocks for es!',
@@ -166,12 +206,11 @@ class TestFeedback(TestCase):
             })
 
             self.assertRedirects(resp, reverse('thanks'))
-            eq_(count + 1, models.Response.uncached.count())
+            eq_(count + 1, models.Response.objects.count())
             feedback = models.Response.objects.latest(field_name='id')
             eq_(u'es', feedback.locale)
             eq_(u'Firefox', feedback.product)
             eq_(u'14.0.1', feedback.version)
-            eq_(u'stable', feedback.channel)
 
         finally:
             # FIXME - We have to do another request to set the
@@ -184,27 +223,24 @@ class TestFeedback(TestCase):
         """Test setting product from the url"""
         amount = models.Response.objects.count()
 
+        ua = 'Mozilla/5.0 (Android; Tablet; rv:24.0) Gecko/24.0 Firefox/24.0'
         url = reverse('feedback', args=(u'android',))
-        resp = self.client.post(url, {
+        data = {
             'happy': 1,
             'description': u'Firefox rocks FFA!',
             'url': u'http://mozilla.org/'
-        })
-
+        }
+        resp = self.client.post(url, data, HTTP_USER_AGENT=ua)
         self.assertRedirects(resp, reverse('thanks'))
         eq_(amount + 1, models.Response.objects.count())
         feedback = models.Response.objects.latest(field_name='id')
         eq_(u'en-US', feedback.locale)
+        # Product comes from the url
         eq_(u'Firefox for Android', feedback.product)
-        eq_(u'', feedback.version)
+        # Since product in user agent matches url, we set the version,
+        # too.
+        eq_(u'24.0', feedback.version)
         eq_(u'', feedback.channel)
-
-    def test_urls_unknown_product(self):
-        """Test unknown product shows unknown product page"""
-        url = reverse('feedback', args=(u'fakeproduct',))
-        resp = self.client.get(url)
-
-        self.assertContains(resp, 'Unknown product')
 
     def test_urls_product_version(self):
         """Test setting version from the url"""
@@ -308,16 +344,16 @@ class TestFeedback(TestCase):
         feedback = models.Response.objects.latest(field_name='id')
         eq_(u'en-US', feedback.locale)
         eq_(u'Firefox', feedback.product)
-        eq_(u'Windows Vista', feedback.platform)
+        eq_(u'Windows Vista', feedback.browser_platform)
 
-    def test_urls_product_no_inferred_platform(self):
-        """Test setting product from the url and platform non-inference"""
+    def test_urls_product_inferred_platform_firefoxdev(self):
+        """Test firefoxdev platform gets inferred"""
         amount = models.Response.objects.count()
 
-        # The UA is for a different browser than what the user is
-        # leaving feedback for, so we should not infer the platform.
+        # Test that we infer the platform if the products are the
+        # same.
         ua = 'Mozilla/5.0 (Windows NT 6.0; rv:14.0) Gecko/20100101 Firefox/14.0.1'  # noqa
-        url = reverse('feedback', args=(u'android',))
+        url = reverse('feedback', args=('firefoxdev',))
         resp = self.client.post(
             url,
             {
@@ -331,12 +367,112 @@ class TestFeedback(TestCase):
         eq_(amount + 1, models.Response.objects.count())
         feedback = models.Response.objects.latest(field_name='id')
         eq_(u'en-US', feedback.locale)
-        eq_(u'Firefox for Android', feedback.product)
+        eq_(u'Firefox dev', feedback.product)
+        eq_(u'Windows Vista', feedback.browser_platform)
+
+    def test_urls_product_not_inferred_platform_firefoxdev(self):
+        """Test firefoxdev platform doesn't get inferred if not Firefox"""
+        amount = models.Response.objects.count()
+
+        # If the user agent is IE, then don't infer the platform.
+        ua = 'Mozilla/5.0 (compatible; MSIE 10.0; Windows NT 6.1; WOW64; Trident/6.0)'  # noqa
+        url = reverse('feedback', args=('firefoxdev',))
+        resp = self.client.post(
+            url,
+            {
+                'happy': 1,
+                'description': u'Firefox rocks FFA!',
+                'url': u'http://mozilla.org/'
+            },
+            HTTP_USER_AGENT=ua)
+
+        self.assertRedirects(resp, reverse('thanks'))
+        eq_(amount + 1, models.Response.objects.count())
+        feedback = models.Response.objects.latest(field_name='id')
+        eq_(u'en-US', feedback.locale)
+        eq_(u'Firefox dev', feedback.product)
+        eq_(u'', feedback.browser_platform)
+
+    def test_urls_product_no_inferred_platform(self):
+        """Test setting product from the url and platform non-inference"""
+        prod = ProductFactory(
+            display_name=u'Someprod',
+            db_name=u'Someprod',
+            slug=u'someprod',
+            enabled=True,
+        )
+
+        amount = models.Response.objects.count()
+
+        # The UA is for a different browser than what the user is
+        # leaving feedback for, so we should not infer the platform.
+        ua = 'Mozilla/5.0 (Windows NT 6.0; rv:14.0) Gecko/20100101 Firefox/14.0.1'  # noqa
+        url = reverse('feedback', args=(prod.slug,))
+        resp = self.client.post(
+            url,
+            {
+                'happy': 1,
+                'description': u'Firefox rocks FFA!',
+                'url': u'http://mozilla.org/'
+            },
+            HTTP_USER_AGENT=ua)
+
+        self.assertRedirects(resp, reverse('thanks'))
+        eq_(amount + 1, models.Response.objects.count())
+        feedback = models.Response.objects.latest(field_name='id')
+        eq_(u'en-US', feedback.locale)
+        eq_(u'Someprod', feedback.product)
+        eq_(u'', feedback.platform)
+
+    def test_infer_version_if_product_matches(self):
+        """Infer the version from the user agent if products match"""
+        amount = models.Response.objects.count()
+
+        # Test that we infer the platform if the products are the
+        # same.
+        ua = 'Mozilla/5.0 (Windows NT 6.0; rv:14.0) Gecko/20100101 Firefox/14.0.1'  # noqa
+        url = reverse('feedback', args=(u'firefox',))
+        data = {
+            'happy': 1,
+            'description': u'Firefox rocks FFA!',
+            'url': u'http://mozilla.org/'
+        }
+        resp = self.client.post(url, data, HTTP_USER_AGENT=ua)
+
+        self.assertRedirects(resp, reverse('thanks'))
+        eq_(amount + 1, models.Response.objects.count())
+        feedback = models.Response.objects.latest(field_name='id')
+        eq_(u'en-US', feedback.locale)
+        eq_(u'Firefox', feedback.product)
+        eq_(u'14.0.1', feedback.version)
+        eq_(u'Windows Vista', feedback.platform)
+
+    def test_dont_infer_version_if_product_doesnt_match(self):
+        """Don't infer version from the user agent if product doesn't match"""
+        amount = models.Response.objects.count()
+
+        # Using a Firefox for Android browser to leave feedback for Firefox
+        # Desktop.
+        ua = 'Mozilla/5.0 (Android; Tablet; rv:24.0) Gecko/24.0 Firefox/24.0'
+        url = reverse('feedback', args=(u'firefox',))
+        data = {
+            'happy': 1,
+            'description': u'Firefox rocks FFA!',
+            'url': u'http://mozilla.org/'
+        }
+        resp = self.client.post(url, data, HTTP_USER_AGENT=ua)
+
+        self.assertRedirects(resp, reverse('thanks'))
+        eq_(amount + 1, models.Response.objects.count())
+        feedback = models.Response.objects.latest(field_name='id')
+        eq_(u'en-US', feedback.locale)
+        eq_(u'Firefox', feedback.product)
+        eq_(u'', feedback.version)
         eq_(u'', feedback.platform)
 
     def test_invalid_form(self):
         """Bad data gets ignored. Thanks!"""
-        url = reverse('feedback')
+        url = reverse('feedback', args=(u'firefox',))
         r = self.client.post(url, {
             'url': 'http://mozilla.org/'
             # No happy/sad
@@ -348,7 +484,7 @@ class TestFeedback(TestCase):
 
     def test_invalid_form_happy(self):
         """Bad data gets ignored. Thanks!"""
-        url = reverse('feedback')
+        url = reverse('feedback', args=(u'firefox',))
         r = self.client.post(url, {
             'url': 'http://mozilla.org/',
             'happy': 0
@@ -360,7 +496,7 @@ class TestFeedback(TestCase):
 
     def test_invalid_form_sad(self):
         """Bad data gets ignored. Thanks!"""
-        url = reverse('feedback')
+        url = reverse('feedback', args=(u'firefox',))
         r = self.client.post(url, {
             'url': 'http://mozilla.org/',
             'happy': 1
@@ -372,7 +508,7 @@ class TestFeedback(TestCase):
 
     def test_whitespace_description(self):
         """Descriptions with just whitespace get thrown out"""
-        url = reverse('feedback')
+        url = reverse('feedback', args=(u'firefox',))
         r = self.client.post(url, {
             'url': 'http://mozilla.org/',
             'happy': 0,
@@ -384,7 +520,7 @@ class TestFeedback(TestCase):
 
     def test_unicode_in_description(self):
         """Description should accept unicode data"""
-        url = reverse('feedback')
+        url = reverse('feedback', args=(u'firefox',))
         r = self.client.post(url, {
             'url': 'http://mozilla.org/',
             'happy': 0,
@@ -396,7 +532,7 @@ class TestFeedback(TestCase):
 
     def test_unicode_in_url(self):
         """URL should accept unicode data"""
-        url = reverse('feedback')
+        url = reverse('feedback', args=(u'firefox',))
         r = self.client.post(url, {
             'url': u'http://mozilla.org/\u2713',
             'happy': 0,
@@ -418,7 +554,7 @@ class TestFeedback(TestCase):
             ('chrome://foo', 'chrome://foo')
         ]
 
-        url = reverse('feedback')
+        url = reverse('feedback', args=(u'firefox',))
         for item, expected in test_data:
             cache.clear()
 
@@ -429,34 +565,34 @@ class TestFeedback(TestCase):
             })
 
             self.assertRedirects(r, reverse('thanks'))
-            latest = models.Response.uncached.latest('pk')
+            latest = models.Response.objects.latest('pk')
             eq_(latest.url, expected)
 
     def test_url_cleaning(self):
         """Clean urls before saving"""
-        url = reverse('feedback')
+        url = reverse('feedback', args=(u'firefox',))
         self.client.post(url, {
             'url': u'http://mozilla.org:8000/path/?foo=bar#bar',
             'happy': 0,
             'description': u'foo'
         })
-
         feedback = models.Response.objects.latest(field_name='id')
         eq_(feedback.url, u'http://mozilla.org/path/')
 
-    def test_feedback_router(self):
-        """Requesting a generic template should give a feedback form."""
-        url = reverse('feedback')
-        ua = ('Mozilla/5.0 (X11; Linux x86_64; rv:21.0) Gecko/20130212 '
-              'Firefox/21.0')
-
-        r = self.client.get(url, HTTP_USER_AGENT=ua)
-        eq_(200, r.status_code)
-        self.assertTemplateUsed(r, 'feedback/generic_feedback.html')
+    def test_url_leading_trailing_whitespace_removal(self):
+        """Leading/trailing whitespace in urls is stripped"""
+        url = reverse('feedback', args=(u'firefox',))
+        self.client.post(url, {
+            'url': u'   \t\n\r',
+            'happy': 0,
+            'description': u'foo'
+        })
+        feedback = models.Response.objects.latest(field_name='id')
+        eq_(feedback.url, u'')
 
     def test_email_collection(self):
         """If the user enters an email and checks the box, collect email."""
-        url = reverse('feedback')
+        url = reverse('feedback', args=(u'firefox',))
 
         r = self.client.post(url, {
             'happy': 0,
@@ -471,7 +607,7 @@ class TestFeedback(TestCase):
         """If an email is entered, but box is not checked, don't collect."""
         email_count = models.ResponseEmail.objects.count()
 
-        url = reverse('feedback')
+        url = reverse('feedback', args=(u'firefox',))
 
         r = self.client.post(url, {
             'happy': 0,
@@ -484,7 +620,7 @@ class TestFeedback(TestCase):
 
     def test_email_missing(self):
         """If no email, ignore it."""
-        url = reverse('feedback')
+        url = reverse('feedback', args=(u'firefox',))
 
         r = self.client.post(url, {
             'happy': 0,
@@ -498,7 +634,7 @@ class TestFeedback(TestCase):
 
     def test_email_invalid(self):
         """If email_ok box is checked, but bad email or no email, ignore it."""
-        url = reverse('feedback')
+        url = reverse('feedback', args=(u'firefox',))
 
         # Invalid email address gets ignored, but response is
         # otherwise saved.
@@ -523,9 +659,109 @@ class TestFeedback(TestCase):
         # Bad email if the box is not checked is not an error.
         eq_(r.status_code, 302)
 
+    def test_browser_data_collection(self):
+        """If the user checks the box, collect the browser data."""
+        url = reverse('feedback', args=(u'firefox',))
+        browser_data = {'application': 'foo'}
+
+        r = self.client.post(url, {
+            'happy': 0,
+            'description': u"I like the colors.",
+            'browser_ok': 'on',
+            'browser_data': json.dumps(browser_data)
+        })
+        eq_(r.status_code, 302)
+        eq_(models.ResponsePI.objects.count(), 1)
+        rti = models.ResponsePI.objects.latest('id')
+        eq_(rti.data, browser_data)
+
+    def test_browser_data_not_ok(self):
+        """If the user doesn't check the box, don't collect data."""
+        # Note: We shouldn't ever be in this situation since the form
+        # only adds the browser data when the user checks the box and
+        # when they uncheck the box, the form removes it. This test is
+        # here in case that code is busted.
+        url = reverse('feedback', args=(u'firefox',))
+        browser_data = {'application': 'foo'}
+
+        r = self.client.post(url, {
+            'happy': 0,
+            'description': u"I like the colors.",
+            'browser_ok': '',
+            'browser_data': json.dumps(browser_data)
+        })
+        eq_(r.status_code, 302)
+        eq_(models.ResponsePI.objects.count(), 0)
+
+    def test_browser_data_invalid(self):
+        """If browser_data is not valid json, don't collect it."""
+        url = reverse('feedback', args=(u'firefox',))
+
+        r = self.client.post(url, {
+            'happy': 0,
+            'description': u"I like the colors.",
+            'browser_ok': 'on',
+            'browser_data': 'invalid json'
+        })
+        eq_(r.status_code, 302)
+        eq_(models.ResponsePI.objects.count(), 0)
+
+    def test_browser_data_there_for_product_as_firefox(self):
+        # Feedback for ProductFoo should collect browser data if the browser
+        # being used is "Firefox".
+        prod = ProductFactory(
+            display_name=u'ProductFoo',
+            slug=u'productfoo',
+            enabled=True,
+            browser_data_browser=u'Firefox'
+        )
+
+        ua = 'Mozilla/5.0 (X11; Linux i686; rv:17.0) Gecko/17.0 Firefox/17.0'
+        resp = self.client.get(
+            reverse('feedback', args=(prod.slug,)),
+            HTTP_USER_AGENT=ua
+        )
+        assert 'browser-ask' in resp.content
+
+    def test_browser_data_not_there_for_product_no_collection(self):
+        # Feedback for ProductFoo should not collect browser data
+        # because the product doesn't collect browser data for any
+        # browser since the default for browser_data_browser is empty
+        # string.
+        prod = ProductFactory(
+            display_name=u'ProductFoo',
+            slug=u'productfoo',
+            enabled=True
+        )
+
+        ua = 'Mozilla/5.0 (X11; Linux i686; rv:17.0) Gecko/17.0 Firefox/17.0'
+        resp = self.client.get(
+            reverse('feedback', args=(prod.slug,)),
+            HTTP_USER_AGENT=ua
+        )
+        assert 'browser-ask' not in resp.content
+
+    def test_browser_data_not_there_for_product_wrong_browser(self):
+        # Feedback for ProductFoo should not collect browser data if
+        # the browser being used doesn't match the browser it should
+        # collect browser data for.
+        prod = ProductFactory(
+            display_name=u'ProductFoo',
+            slug=u'productfoo',
+            enabled=True,
+            browser_data_browser=u'Android'
+        )
+
+        ua = 'Mozilla/5.0 (X11; Linux i686; rv:17.0) Gecko/17.0 Firefox/17.0'
+        resp = self.client.get(
+            reverse('feedback', args=(prod.slug,)),
+            HTTP_USER_AGENT=ua
+        )
+        assert 'browser-ask' not in resp.content
+
     def test_src_to_source(self):
         """We capture the src querystring arg in the source column"""
-        url = reverse('feedback')
+        url = reverse('feedback', args=(u'firefox',))
 
         r = self.client.post(url + '?src=newsletter', {
             'happy': 0,
@@ -539,7 +775,7 @@ class TestFeedback(TestCase):
 
     def test_utm_source_to_source(self):
         """We capture the utm_source querystring arg in the source column"""
-        url = reverse('feedback')
+        url = reverse('feedback', args=(u'firefox',))
 
         r = self.client.post(url + '?utm_source=newsletter', {
             'happy': 0,
@@ -553,7 +789,7 @@ class TestFeedback(TestCase):
 
     def test_utm_campaign_to_source(self):
         """We capture the utm_campaign querystring arg in the source column"""
-        url = reverse('feedback')
+        url = reverse('feedback', args=(u'firefox',))
 
         r = self.client.post(url + '?utm_campaign=20140220_email', {
             'happy': 0,
@@ -567,7 +803,7 @@ class TestFeedback(TestCase):
 
     def test_save_context_basic(self):
         """We capture any querystring vars as context"""
-        url = reverse('feedback')
+        url = reverse('feedback', args=(u'firefox',))
 
         r = self.client.post(url + '?foo=bar', {
             'happy': 0,
@@ -577,11 +813,11 @@ class TestFeedback(TestCase):
         self.assertRedirects(r, reverse('thanks'))
 
         context = models.ResponseContext.objects.latest(field_name='id')
-        eq_(context.data, u'{"foo": "bar"}')
+        eq_(context.data, {'foo': 'bar'})
 
     def test_save_context_long_key(self):
         """Long keys are truncated"""
-        url = reverse('feedback')
+        url = reverse('feedback', args=(u'firefox',))
 
         r = self.client.post(url + '?foo12345678901234567890=bar', {
             'happy': 0,
@@ -591,11 +827,11 @@ class TestFeedback(TestCase):
         self.assertRedirects(r, reverse('thanks'))
 
         context = models.ResponseContext.objects.latest(field_name='id')
-        eq_(context.data, u'{"foo12345678901234567": "bar"}')
+        eq_(context.data, {'foo12345678901234567': 'bar'})
 
     def test_save_context_long_val(self):
         """Long values are truncated"""
-        url = reverse('feedback')
+        url = reverse('feedback', args=(u'firefox',))
 
         r = self.client.post(url + '?foo=' + ('a' * 100) + 'b', {
             'happy': 0,
@@ -605,11 +841,11 @@ class TestFeedback(TestCase):
         self.assertRedirects(r, reverse('thanks'))
 
         context = models.ResponseContext.objects.latest(field_name='id')
-        eq_(context.data, u'{"foo": "' + ('a' * 100) + '"}')
+        eq_(context.data, {'foo': ('a' * 100)})
 
     def test_save_context_maximum_pairs(self):
         """Only save 20 pairs"""
-        url = reverse('feedback')
+        url = reverse('feedback', args=(u'firefox',))
 
         qs = '&'.join(['foo%02d=%s' % (i, i) for i in range(25)])
 
@@ -621,10 +857,14 @@ class TestFeedback(TestCase):
         self.assertRedirects(r, reverse('thanks'))
 
         context = models.ResponseContext.objects.latest(field_name='id')
-        data = sorted(json.loads(context.data).items())
+        data = sorted(context.data.items())
         eq_(len(data), 20)
         eq_(data[0], (u'foo00', '0'))
         eq_(data[-1], (u'foo19', '19'))
+
+
+class TestDeprecatedAndroidFeedback(TestCase):
+    client_class = LocalizingClient
 
     def test_deprecated_firefox_for_android_feedback_works(self):
         """Verify firefox for android can post feedback"""
@@ -652,7 +892,6 @@ class TestFeedback(TestCase):
         eq_(u'en-US', feedback.locale)
         # Note: This comes from the user agent from the LocalizingClient
         eq_(u'Firefox for Android', feedback.product)
-        eq_(u'stable', feedback.channel)
         eq_(u'24.0', feedback.version)
 
     def test_deprecated_firefox_for_android_sad_is_sad(self):
@@ -678,7 +917,6 @@ class TestFeedback(TestCase):
         eq_(u'en-US', feedback.locale)
         # Note: This comes from the user agent from the LocalizingClient
         eq_(u'Firefox for Android', feedback.product)
-        eq_(u'stable', feedback.channel)
         eq_(u'24.0', feedback.version)
 
     def test_deprecated_firefox_for_android_ideas_are_sad(self):
@@ -705,7 +943,6 @@ class TestFeedback(TestCase):
         eq_(u'en-US', feedback.locale)
         # Note: This comes from the user agent from the LocalizingClient
         eq_(u'Firefox for Android', feedback.product)
-        eq_(u'stable', feedback.channel)
         eq_(u'24.0', feedback.version)
 
     def test_deprecated_firefox_for_android_minimal(self):
@@ -730,7 +967,6 @@ class TestFeedback(TestCase):
         eq_(u'en-US', feedback.locale)
         # Note: This comes from the user agent from the LocalizingClient
         eq_(u'Firefox for Android', feedback.product)
-        eq_(u'stable', feedback.channel)
         eq_(u'24.0', feedback.version)
 
     def test_deprecated_firefox_for_android_phony_ua(self):
@@ -762,6 +998,77 @@ class TestFeedback(TestCase):
         eq_(feedback.version, u'')
 
 
+class TestPicker(TestCase):
+    client_class = LocalizingClient
+
+    def setUp(self):
+        # FIXME: We can nix this when we stop doing data migrations in
+        # test setup.
+        models.Product.objects.all().delete()
+
+    def test_picker_no_products(self):
+        resp = self.client.get(reverse('feedback'))
+
+        eq_(resp.status_code, 200)
+        self.assertTemplateUsed(resp, 'feedback/picker.html')
+        assert 'No products available.' in resp.content
+
+    def test_picker_with_products(self):
+        ProductFactory(display_name=u'ProductFoo', slug=u'productfoo')
+        ProductFactory(display_name=u'ProductBar', slug=u'productbar')
+
+        cache.clear()
+
+        resp = self.client.get(reverse('feedback'))
+
+        eq_(resp.status_code, 200)
+
+        self.assertContains(resp, 'ProductFoo')
+        self.assertContains(resp, 'productfoo')
+        self.assertContains(resp, 'ProductBar')
+        self.assertContains(resp, 'productbar')
+
+    def test_picker_with_disabled_products(self):
+        ProductFactory(display_name=u'ProductFoo', slug=u'productfoo',
+                       enabled=True)
+        ProductFactory(display_name=u'ProductBar', slug=u'productbar',
+                       enabled=False)
+
+        cache.clear()
+
+        resp = self.client.get(reverse('feedback'))
+
+        eq_(resp.status_code, 200)
+
+        # This is on the picker
+        self.assertContains(resp, 'ProductFoo')
+        self.assertContains(resp, 'productfoo')
+
+        # This is not on the picker
+        self.assertNotContains(resp, 'ProductBar')
+        self.assertNotContains(resp, 'productbar')
+
+    def test_picker_with_not_on_picker_products(self):
+        ProductFactory(display_name=u'ProductFoo', slug=u'productfoo',
+                       on_picker=True)
+        ProductFactory(display_name=u'ProductBar', slug=u'productbar',
+                       on_picker=False)
+
+        cache.clear()
+
+        resp = self.client.get(reverse('feedback'))
+
+        eq_(resp.status_code, 200)
+
+        # This is on the picker
+        self.assertContains(resp, 'ProductFoo')
+        self.assertContains(resp, 'productfoo')
+
+        # This is not on the picker
+        self.assertNotContains(resp, 'ProductBar')
+        self.assertNotContains(resp, 'productbar')
+
+
 class TestCSRF(TestCase):
     def setUp(self):
         super(TestCSRF, self).setUp()
@@ -770,7 +1077,7 @@ class TestCSRF(TestCase):
 
     def test_no_csrf_regular_form_fails(self):
         """No csrf token in post data from anonymous user yields 403."""
-        url = reverse('feedback')
+        url = reverse('feedback', args=(u'firefox',))
         r = self.client.post(url, {
             'happy': 1,
             'description': u'Firefox rocks!',
@@ -781,7 +1088,7 @@ class TestCSRF(TestCase):
 
     def test_firefox_for_android(self):
         """No csrf token for a FfA post works fine."""
-        url = reverse('feedback')
+        url = reverse('feedback', args=(u'firefox',))
         r = self.client.post(url, {
             '_type': 1,
             'description': u'Firefox rocks!',
@@ -801,7 +1108,7 @@ class TestWebFormThrottling(TestCase):
         initial_amount = models.Response.objects.count()
         eq_(initial_amount, 0)
 
-        url = reverse('feedback')
+        url = reverse('feedback', args=(u'firefox',))
 
         # Toss 100 responses in.
         for i in range(100):
@@ -831,7 +1138,7 @@ class TestWebFormThrottling(TestCase):
         initial_amount = models.Response.objects.count()
         eq_(initial_amount, 0)
 
-        url = reverse('feedback')
+        url = reverse('feedback', args=(u'firefox',))
 
         data = {
             'happy': 1,
@@ -854,29 +1161,3 @@ class TestWebFormThrottling(TestCase):
         r = self.client.post(url, data)
         self.assertRedirects(r, reverse('thanks'))
         eq_(models.Response.objects.count(), 2)
-
-
-class TestRouting(TestCase):
-    uas = {
-        'android': 'Mozilla/5.0 (Android; Mobile; rv:18.0) Gecko/18.0 '
-                   'Firefox/18.0',
-        'linux': 'Mozilla/5.0 (X11; Linux x86_64; rv:21.0) Gecko/20130212 '
-                 'Firefox/21.0',
-        'osx': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.7; rv:20.0) '
-               'Gecko/20130208 Firefox/20.0',
-    }
-
-    def setUp(self):
-        super(TestRouting, self).setUp()
-        self.factory = RequestFactory()
-
-    def sub_prodchan(self, ua, prodchan):
-        # _get_prodchan checks request.BROWSER to decide what to do, so
-        # give it a mocked object that has that.
-        fake_req = NonCallableMock(BROWSER=parse_ua(ua))
-        eq_(prodchan, _get_prodchan(fake_req))
-
-    def test_prodchan(self):
-        self.sub_prodchan(self.uas['android'], 'firefox.android.stable')
-        self.sub_prodchan(self.uas['osx'], 'firefox.desktop.stable')
-        self.sub_prodchan(self.uas['linux'], 'firefox.desktop.stable')

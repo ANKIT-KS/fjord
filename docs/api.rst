@@ -1,13 +1,13 @@
 .. _api-chapter:
 
-=====
- API
-=====
+============
+Feedback API
+============
 
 .. contents::
    :local:
 
-Fjord has several POST APIs and one GET API for data.
+The Feedback API is for getting/posting product feedback data.
 
 
 Getting product feedback: GET /api/v1/feedback/
@@ -15,8 +15,8 @@ Getting product feedback: GET /api/v1/feedback/
 
 :URL:            ``/api/v1/feedback/``
 :Method:         HTTP GET
-:Payload format: There is no payload--everything is done in the querystring
-
+:Payload format: No payload--everything is done in the querystring
+:Response:       JSON
 
 Doing a GET without any querystring arguments will return the most
 recent 1,000 publicly visible responses for all products.
@@ -40,6 +40,18 @@ recent 1,000 publicly visible responses for all products.
 
 Filters
 -------
+
+**id**
+    String. Comma-separated list of feedback response ids.
+
+    Example::
+
+        ?id=1
+        ?id=1,2,3,4
+
+    .. Note::
+
+       If you specify this, all other filters will be ignored.
 
 **q**
     String. Text query.
@@ -113,8 +125,8 @@ Filters
         ?date_end=2014-08-12
 
 **date_delta**
-    ``1d``, ``7d``, ``14d``. The number of days from ``date_start`` or
-    ``date_end``.
+    String. ``1d``, ``7d``, ``14d``, etc. The number of days from
+    ``date_start`` or ``date_end``.
 
     Example::
 
@@ -124,8 +136,8 @@ Filters
         # Shows 14 days ending 2014-08-12
         ?date_end=2014-08-12&date_delta=14d
 
-        # Shows 14 days starting 2014-08-12
-        ?date_start=2014-08-12&date_delta=14d
+        # Shows 22 days starting 2014-08-12
+        ?date_start=2014-08-12&date_delta=22d
 
 **max**
 
@@ -156,7 +168,7 @@ Show sad responses for Windows platforms for the last day::
 
 
 Posting product feedback: POST /api/v1/feedback/
-================================================
+================--------========================
 
 :URL:            ``/api/v1/feedback/``
 :Method:         HTTP POST
@@ -320,6 +332,12 @@ Optional fields
 
     Example: ``'Hacks blog'``
 
+    .. Note::
+
+       Don't set the source if the user is leaving feedback of their
+       own accord. Only set the source if you have prompted or asked
+       the user to leave feedback.
+
 **campaign**
     String. Max length: 100. If this response was initiated by a
     marketing campaign, this is the name of the campaign. It has the
@@ -328,6 +346,12 @@ Optional fields
     https://support.google.com/analytics/answer/1033867
 
     Example: ``'show the firefox love post'``
+
+    .. Note::
+
+       Don't set the campaign if the user is leaving feedback of their
+       own accord. Only set the campaign if you have prompted or asked
+       the user to leave feedback.
 
 
 Extra context
@@ -405,150 +429,3 @@ HTTP 400
 HTTP 429
     There has been too many feedback postings from this IP address and
     the throttle trigger was hit. Try again later.
-
-
-Posting heartbeat feedback: /api/v1/hb/
-=======================================
-
-:URL:            ``/api/v1/hb/``
-:Method:         HTTP POST
-:Payload format: JSON--make sure to have ``Content-type: application/json``
-                 header
-
-
-Testing clients using the API
------------------------------
-
-.. Warning::
-
-   **DO NOT TEST YOUR CLIENT AGAINST OUR PRODUCTION SERVER. IT WILL
-   MAKE CHENG, MATT, TYLER AND I CROSS.**
-
-
-Seriously. Please don't test your client against our production
-server.
-
-Test your client against our stage server which runs the same code
-that our production server does. The url for the our stage server is::
-
-    https://input.allizom.org/
-                  ^^^^^^^
-
-
-Please make sure to use the correct domain!
-
-
-Required fields
----------------
-
-**locale**
-    String. Max length: 8. The locale of the user interface that the
-    user is using
-
-    Examples:``"en-US"``, ``"fr"``, ``"de"``
-
-**platform**
-    String. Max length: 30. The name of the operating system/platform
-    the product is running on.
-
-    Examples: ``"OS X"``, ``"Windows 8"``, ``"Firefox OS"``,
-    ``"Android"``, ``"Linux"``
-
-**product**
-    String. Max length: 30. The name of the product the user is giving
-    feedback on.
-
-    Examples:``"Firefox for Android"``, ``"Firefox OS"``
-
-    .. Note::
-
-       This must be a valid product in the system. Before you start
-       posting to Input, please talk to the User Advocacy folks or an
-       Input admin to have your product added.
-
-**channel**
-    String. Max length: 30. The channel of the product the user is
-    giving feedback on.
-
-    Examples:``"stable"``, ``"beta"``
-
-**version**
-    String. Max length: 30. The version of the product the user is
-    giving feedback on as a string.
-
-    Examples:``"22b2"``, ``"1.1"``
-
-
-    String. The operating system the user is using
-
-**poll**
-    String. Max length: 50. Alpha-numeric characters and ``-`` only. The
-    slug of the poll this heartbeat response is for.
-
-    Examples:``"is-firefox-fast"``
-
-    .. Note::
-
-       The poll must be created on the Input system you're testing
-       against and enabled. Otherwise you'll get errors.
-
-       Before you start posting to Input, please talk to the User
-       Advocacy folks or an Input admin to have your product added.
-
-**answer**
-    String. Max length: 10. The answer value.
-
-    Examples: ``"true"``, ``"false"``, ``"4"``
-
-
-Extra data
-    Any additional fields you provide in the POST data will get
-    glommed into a JSON object and stuck in the db.
-
-
-Curl examples
--------------
-
-Minimal example:
-
-::
-
-    curl -v -XPOST $URL \
-        -H 'Accept: application/json; indent=4' \
-        -H 'Content-type: application/json' \
-        -d '
-    {
-        "locale": "en-US",
-        "platform": "Linux",
-        "product": "Firefox",
-        "version": "30.0",
-        "channel": "stable",
-        "poll": "ou812",
-        "answer": "42"
-    }'
-
-
-Here's an example providing "extra" data:
-
-::
-
-    curl -v -XPOST $URL \
-        -H 'Accept: application/json; indent=4' \
-        -H 'Content-type: application/json' \
-        -d '
-    {
-        "locale": "en-US",
-        "platform": "Linux",
-        "product": "Firefox",
-        "version": "30.0",
-        "channel": "stable",
-        "poll": "ou812",
-        "answer": "42",
-        "favoritepie": "cherry",
-        "favoriteUAperson": "tyler"
-    }'
-
-The extra fields are plucked out and put in a JSON object and stored
-in the db like this::
-
-    {"favoritepie": "cherry", "favoriteUAperson": "tyler"}

@@ -22,12 +22,12 @@ apt-get install -y -q npm
 # Homogenize binary name with production RHEL:
 ln -sf /usr/bin/nodejs /usr/local/bin/node
 
-# Install LESSC
-npm install -g less
+# Install node modules from package.json
+sudo -H -u vagrant npm install
 
 # Install Python development-related things:
-apt-get install -y -q libapache2-mod-wsgi python-pip libpython-dev
-pip install virtualenv nose Sphinx
+apt-get install -y -q libapache2-mod-wsgi python-pip python-virtualenv libpython-dev
+pip install nose Sphinx
 
 # Install git:
 apt-get install -y -q git
@@ -52,16 +52,19 @@ mysql -uroot -ppassword -hlocalhost \
 VENV=/home/vagrant/.virtualenvs/fjordvagrant
 
 # Build virtual environment and activate it
-sudo -u vagrant virtualenv $VENV
+sudo -H -u vagrant virtualenv $VENV
+
+# Install bits we need for compiled requirements
+apt-get install -y -q libxml2 libxml2-dev libxslt1.1 libxslt1-dev
 
 # Install Fjord requirements
-sudo -u vagrant $VENV/bin/python ./peep install -r requirements/requirements.txt
-
-# Install compiled requirements
-# Note: Need to do this before launching Elasticsearch because of
-# memory issues
-apt-get install -y -q libxml2 libxml2-dev libxslt1.1 libxslt1-dev
-sudo -u vagrant $VENV/bin/python ./peep install -r requirements/compiled.txt
+sudo -H -u vagrant -s -- <<EOF
+source $VENV/bin/activate
+cd ~/fjord
+./peep.sh install -r requirements/requirements.txt
+./peep.sh install -r requirements/compiled.txt
+./peep.sh install -r requirements/dev.txt
+EOF
 
 # Install Elasticsearch 0.90.10
 curl http://packages.elasticsearch.org/GPG-KEY-elasticsearch | apt-key add -
@@ -75,6 +78,12 @@ update-rc.d elasticsearch defaults 95 10
 # Install memcached
 apt-get install -y -q memcached
 
+# Install subversion (used to download locales)
+apt-get install -y -q subversion
+
+# Install gettext (used to compile locales)
+apt-get install -y -q gettext
+
 # Create local settings file if it doesn't exist
 [ -f fjord/settings/local.py ] || cp fjord/settings/local.py-dist fjord/settings/local.py
 
@@ -84,6 +93,9 @@ apt-get autoremove -y -q
 
 # Activate the virtual environment in .bashrc
 echo ". $VENV/bin/activate" >> /home/vagrant/.bashrc
+
+# Add the 'bin' folder of local node modules to $PATH
+echo "export PATH=\$PATH:/home/vagrant/fjord/node_modules/.bin/" >> /home/vagrant/.bashrc
 
 # FIXME: Change the motd file so that it has a link to Fjord docs,
 # tells the user where the code is and lists common commands.

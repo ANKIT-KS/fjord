@@ -7,8 +7,8 @@
 .. contents::
    :local:
 
-Best way to set up Fjord on your computer is by using Vagrant to set
-Fjord up in a virtual machine.
+This guide walks through getting a development environment set up
+to allow you to contribute to Fjord.
 
 .. Note::
 
@@ -21,6 +21,13 @@ Getting the requirements
 
 1. Download and install git if you don't have it already:
    http://git-scm.com/
+
+   .. Note::
+
+      **Windows users:** When you install git, make sure to choose
+      "Checkout as-is, commit Unix-style line endings". If you don't,
+      then you'll end up with Windows-style line endings in your
+      checkout and Fjord won't work in the virtual machine.
 
 2. Download and install VirtualBox if you don't have it already:
    https://www.virtualbox.org/
@@ -79,10 +86,10 @@ After that, the versions of the two things should be the same and you
 should be good to go to the next step.
 
 
-Building a VM and booting it
+Building a vm and booting it
 ============================
 
-This will build a VirtualBox VM using Vagrant. The VM will have Ubuntu
+This will build a VirtualBox vm using Vagrant. The vm will have Ubuntu
 Linux 14.04 installed in it. Fjord works in this environment.
 
 Run this commands in the Fjord repository top-level directory::
@@ -98,7 +105,11 @@ runs in this VM using the files on your machine. This allows you to
 use whatever editor you like on your machine to edit code that runs in
 the VM without having to copy files around.
 
-After that, we have some minor setup to do::
+
+Setting up Fjord
+================
+
+After you've created a vm, we have some minor setup to do::
 
     # Create a shell on the guest virtual machine
     vagrant ssh
@@ -106,12 +117,24 @@ After that, we have some minor setup to do::
     # Change into the fjord/ directory
     cd ~/fjord
 
-    # Create the database and a superuser
-    ./manage.py syncdb
+
+First we download all the product detail data::
 
 
-It will ask if you want to create a superuser. You totally do! Create
-a superuser that you'll use to log into Fjord.
+    # Update product details
+    ./manage.py update_product_details -f
+
+
+Then we set up the database::
+
+    # Create the database and run migrations
+    ./manage.py migrate
+
+
+Then we create a superuser to log into Fjord::
+
+    ./manage.py createsuperuser
+
 
 The username and password don't matter, but the email address
 does. You must choose an email address that is your Persona
@@ -120,15 +143,16 @@ identity. If you don't have a Persona identity, you can create one at
 
 .. Note::
 
-   You can create a superuser at any time by doing::
+   You can convert any account into a superuser account by doing::
 
-       ./manage.py createsuperuser
+       ./manage.py ihavepower <email-address>
 
 
-After you do that, you need to run migrations::
+After that, let's generate some data in the database so that we have
+something to look at. We'll then need to index that data so it shows
+up in searches.
 
-    # Run the db migrations
-    ./manage.py migrate --all
+::
 
     # Generate sample data
     ./manage.py generatedata
@@ -177,7 +201,7 @@ the generatedata command every time you need fresh data.
 
 The generatedata command only generates data and saves it to the
 db. After running generatedata, you'll need to add that data to the
-Elasticsearch index.
+Elasticsearch index::
 
     ./manage.py generatedata
     ./manage.py esreindex
@@ -220,17 +244,20 @@ For each command, you can get help by typing::
 
 We use the following ones pretty often:
 
-============  ====================================================================
-Command       Explanation
-============  ====================================================================
-generatedata  Generates fake data so Fjord works
-runserver     Runs the Django server
-test          Runs the unit tests
-migrate       Migrates the db with all the migrations specified in the repository
-shell         Opens a Python REPL in the Django context for debugging
-esreindex     Reindexes all the db data into Elasticsearch
-esstatus      Shows the status of things in Elasticsearch
-============  ====================================================================
+======================  ====================================================================
+Command                 Explanation
+======================  ====================================================================
+generatedata            Generates fake data so Fjord works
+runserver               Runs the Django server
+collectstatic           Collects static files and "compiles" them
+test                    Runs the unit tests
+migrate                 Migrates the db with all the migrations specified in the repository
+shell                   Opens a Python REPL in the Django context for debugging
+esreindex               Reindexes all the db data into Elasticsearch
+esstatus                Shows the status of things in Elasticsearch
+update_product_details  Updates the product details with the latest information
+ihavepower              Turns a user account into a superuser
+======================  ====================================================================
 
 
 generatedata
@@ -266,19 +293,45 @@ Run it like this::
     ./manage.py runserver 0.0.0.0:8000
 
 
+collectstatic
+-------------
+
+When you're running the dev server (i.e. ``./manage.py runserver ...``),
+Fjord compiles the LESS files to CSS files and serves them
+individually. When you're running Fjord in a server environment, you
+run::
+
+    ./manage.py collectstatic
+
+to compile the LESS files to CSS files and then bundle the CSS files
+and JS files into single files and minify them. This reduces the
+number of HTTP requests the browser has to make to fetch all the
+relevant CSS and JS files for a page. It makes our pages load faster.
+
+However, a handful of tests depend on the bundles being built and will
+fail unless you run ``collectstatic`` first.
+
+
 test
 ----
 
 The test suite will create and use this database, to keep any data in
 your development database safe from tests.
 
-Run the test suite this way::
+Before you run the tests, make sure you run ``collectstatic``::
 
-    ./manage.py test -s --noinput --logging-clear-handlers
+    ./manage.py collectstatic
+
+I run this any time I run the tests with a clean database.
+
+The test suite is run like this::
+
+    ./manage.py test
 
 
-For more information, see the :ref:`test documentation
-<tests-chapter>`.
+For more information about running the tests, writing tests, flags you
+can pass, running specific tests and other such things, see the
+:ref:`test documentation <tests-chapter>`.
 
 
 migrate
@@ -326,6 +379,29 @@ doctypes, etc, do::
     ./manage.py esstatus
 
 
+update_product_details
+----------------------
+
+Event data like Firefox releases and locale data are all located on a
+server far far away. Fjord keeps a copy of the product details local
+because it requires this to run.
+
+Periodically you want to update your local copy of the data. You can do that by
+running::
+
+    ./manage.py update_product_details
+
+
+ihavepower
+----------
+
+If you create an account on Fjord and want to turn it into a superuser
+account that can access the admin, then you need to grant that account
+superuser/admin status. To do that, do::
+
+    ./manage.py ihavepower <email-address>
+
+
 Helpful tips
 ============
 
@@ -337,13 +413,57 @@ We use memcached for caching. to flush the cache, do::
     echo "flush_all" | nc localhost 11211
 
 
+Issues with commit timestamps
+-----------------------------
+
+The Ubuntu image that we are using, has UTC as the configured timezone.
+Due to this, if you are in a different timezone and make commits from
+the VM, the commit timestamps will have a different timezone when
+compared to the timezone on the host computer. To have matching
+timezone on the host and the VM, run::
+
+    sudo dpkg-reconfigure tzdata
+
+and select your current timezone as the timezone for the VM.
+
+
+Keeping up with changes to Fjord
+================================
+
+Fjord is in active development and there may be changes made everyday.
+So if you have an existing fjord development environment and want to
+keep up with the new changes, here are some tips.
+
+* Use the appropriate git commands to update the fjord repository
+  depending on which git workflow you use. For example, if you are
+  tracking the main repository on the master branch of your fork,
+  you will have to run ``git pull`` when on the master branch.
+* If there are database changes in the updates to the repository, those
+  have to be applied. See the section on ``migrate`` command above.
+* If any of the fjord dependencies have changed, you will see an error
+  message like the one below when you run any ``manage.py`` command::
+
+    (fjordvagrant)vagrant@vagrant-ubuntu-trusty-64:~/fjord$ ./manage.py runserver 0.0.0.0:8000
+    There are 28 requirements that cannot be checked.
+    The following requirements are not satsifed:
+    UNSATISFIED: nosenicedots==0.5
+
+  In such a scenario, you have to find out the requirements files in which
+  the unsatisfied requirements are listed and the use ``peep.sh`` to install them.
+  For example you might have to run::
+
+    ./peep.sh install -r requirements/dev.txt
+
+  if there are unsatisfied requirements in ``requirements/dev.txt``.
+
+  
 Where to go from here?
 ======================
 
 :ref:`conventions-chapter` covers project conventions for Python,
 JavaScript, git usage, etc.
 
-:ref:`workflow-chapter` covers the general workflow for taking a but,
+:ref:`workflow-chapter` covers the general workflow for taking a bug,
 working on it and submitting your changes.
 
 :ref:`db-chapter` covers database-related things like updating your

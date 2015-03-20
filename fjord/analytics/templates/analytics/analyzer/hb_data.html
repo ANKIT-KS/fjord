@@ -1,0 +1,212 @@
+{% extends "analytics/analyzer/dashboard.html" %}
+{# Note: This is not l10n-ized since it's only available to analyzers for now. #}
+
+{% macro page_links(request, sortby, answers, survey, surveys) %}
+  <div class="pager">
+    {% if answers.has_previous() %}
+      <a class="prev-link" href="{{ request.get_full_path()|urlparams(sortby=sortby, page=answers.previous_page_number()) }}">
+        Prev
+      </a>
+    {% else %}
+      Prev
+    {% endif %}
+    | Page {{ answers.number }} of {{ answers.paginator.num_pages }} |
+    {% if answers.has_next() %}
+      <a class="next-link" href="{{ request.get_full_path()|urlparams(sortby=sortby, page=answers.next_page_number()) }}">
+        Next
+      </a>
+    {% else %}
+      Next
+    {% endif %}
+    |
+    <a class="first-link" href="{{ request.get_full_path()|urlparams(sortby=sortby, page=1) }}">First</a>
+    |
+    <a class="last-link" href="{{ request.get_full_path()|urlparams(sortby=sortby, page=answers.paginator.num_pages) }}">Last</a>
+
+    &mdash;
+
+    <form method="GET" class="inline-form" action="{{ request.get_full_path() }}">
+      <select name="survey">
+        <option value=""{% if not survey %} selected{% endif %}>ALL</option>
+        {% for obj in surveys %}
+          <option value="{{ obj.id }}"{% if survey and survey.id == obj.id %} selected{% endif %} >{{ obj.name }}</option>
+        {% endfor %}
+      </select>
+      <select name="showdata">
+        <option value="all" {% if showdata == 'all' %} selected {% endif %}>ALL</option>
+        <option value="test" {% if showdata == 'test' %} selected {% endif %}>Only test data</option>
+        <option value="notest" {% if showdata == 'notest' %} selected {% endif %}>Only non-test data</option>
+      </select>
+      <input type="hidden" name="sortby" value="{{ sortby }}">
+      <input type="submit" value="Filter">
+    </form>
+  </div>
+{% endmacro %}
+
+{% macro display_ts(fix_ts, value) %}
+  {% if value %}
+    <span class="nowrap" title="{{ value }}">{{ fix_ts(value) }}</span>
+  {% else %}
+    {{ value }}
+  {% endif %}
+{% endmacro %}
+
+{% block content %}
+  <div class="col full">
+    <div class="block feedback">
+      <h2>Heartbeat v2 data</h2>
+      <p class="secret">
+        Do not tweet!
+      </p>
+
+      {% if answer %}
+        <p><a href="{{ url('hb_data') }}">Back to hb list</a></p>
+
+        <dl class="inline">
+          <dt>id</dt>
+          <dd>{{ answer.id }}</dd>
+
+          <dt>received_ts</dt>
+          <dd>{{ answer.received_ts }}</dd>
+
+          <dt>updated_ts</dt>
+          <dd>{{ answer.updated_ts }}</dd>
+
+          <dt>experiment_version</dt>
+          <dd>{{ answer.experiment_version or "--" }}</dd>
+
+          <dt>response_version</dt>
+          <dd>{{ answer.response_version or "--" }}</dd>
+
+          <dt>person_id</dt>
+          <dd>{{ answer.person_id or "--" }}</dd>
+
+          <dt>survey_id</dt>
+          <dd>{{ answer.survey_id.name or "--" }}</dd>
+
+          <dt>flow_id</dt>
+          <dd>{{ answer.flow_id or "--" }}</dd>
+
+          <dt>question_id</dt>
+          <dd>{{ answer.question_id or "--" }}</dd>
+
+          <dt>question_text</dt>
+          <dd>{{ answer.question_text or "--" }}</dd>
+
+          <dt>variation_id</dt>
+          <dd>{{ answer.variation_id or "--" }}</dd>
+
+          <dt>score</dt>
+          <dd>{{ answer.score or "--" }}</dd>
+
+          <dt>max_score</dt>
+          <dd>{{ answer.max_score or "--" }}</dd>
+
+          <dt>flow_began_ts</dt>
+          <dd>{{ answer.flow_began_ts }}</dd>
+
+          <dt>flow_offered_ts</dt>
+          <dd>{{ answer.flow_offered_ts }}</dd>
+
+          <dt>flow_voted_ts</dt>
+          <dd>{{ answer.flow_voted_ts }}</dd>
+
+          <dt>flow_engaged_ts</dt>
+          <dd>{{ answer.flow_engaged_ts }}</dd>
+
+          <dt>platform</dt>
+          <dd>{{ answer.platform or "--" }}</dd>
+
+          <dt>channel</dt>
+          <dd>{{ answer.channel or "--" }}</dd>
+
+          <dt>version</dt>
+          <dd>{{ answer.version or "--" }}</dd>
+
+          <dt>locale</dt>
+          <dd>{{ answer.locale or "--" }}</dd>
+
+          <dt>build_id</dt>
+          <dd>{{ answer.build_id or "--" }}</dd>
+
+          <dt>partner_id</dt>
+          <dd>{{ answer.partner_id or "--" }}</dd>
+
+          <dt>profile_age</dt>
+          <dd>{{ answer.profile_age }}</dd>
+
+          <dt>profile_usage</dt>
+          <dd>{{ answer.profile_usage or "--" }}</dd>
+
+          <dt>addons</dt>
+          <dd><pre>{{ pformat(answer.addons or "--") }}</pre></dd>
+
+          <dt>extra</dt>
+          <dd><pre>{{ pformat(answer.extra or "--") }}</pre></dd>
+        </dl>
+
+        <p><a href="{{ url('hb_data') }}">Back to hb list</a></p>
+      {% else %}
+        <h2>Total answers: {{ answers.paginator.count }}</h2>
+
+        {{ page_links(request, sortby, answers, survey, surveys) }}
+
+        <table class="summarytable">
+          <tr>
+            <th><a href="{{ request.get_full_path()|urlparams(sortby='id') }}">id</a>{% if sortby == 'id' %} v{% endif %}</th>
+            <th><a href="{{ request.get_full_path()|urlparams(sortby='received_ts') }}">received</a>{% if sortby == 'received_ts' %} v{% endif %}</th>
+            <th><a href="{{ request.get_full_path()|urlparams(sortby='updated_ts') }}">updated</a>{% if sortby == 'updated_ts' %} v{% endif %}</th>
+            <th>experiment ver</th>
+            <th>response ver</th>
+            <th>person_id</th>
+            <th>survey_id</th>
+            <th>flow_id</th>
+            <th>question_id</th>
+            <th>variation_id</th>
+
+            <th>score</th>
+            <th>max_score</th>
+            <th>flow_began_ts</th>
+            <th>flow_offered_ts</th>
+            <th>flow_voted_ts</th>
+            <th>flow_engaged_ts</th>
+            <th>platform</th>
+            <th>channel</th>
+            <th>version</th>
+            <th>locale</th>
+            <th>profile_age</th>
+          </tr>
+
+          {% for ans in answers %}
+            <tr {% if ans.is_test %} class="test-answer" {% endif %}>
+              <td><a href="{{ url('hb_data', answerid=ans.id) }}">{{ ans.id }}</a></td>
+              <td><span class="nowrap" title="{{ ans.received_ts }}">{{ ans.received_ts }}</span></td>
+              <td><span class="nowrap" title="{{ ans.updated_ts }}">{{ fix_ts(ans.updated_ts) }}</span></td>
+              <td>{{ ans.experiment_version }}</td>
+              <td>{{ ans.response_version }}</td>
+              <td>{{ ans.person_id }}</td>
+              <td>{{ ans.survey_id.name }}</td>
+              <td>{{ ans.flow_id }}</td>
+              <td>{{ ans.question_id }}</td>
+              <td>{{ ans.variation_id }}</td>
+
+              <td>{{ ans.score }}</td>
+              <td>{{ ans.max_score }}</td>
+              <td>{{ display_ts(fix_ts, ans.flow_began_ts) }}</td>
+              <td>{{ display_ts(fix_ts, ans.flow_offered_ts) }}</td>
+              <td>{{ display_ts(fix_ts, ans.flow_voted_ts) }}</td>
+              <td>{{ display_ts(fix_ts, ans.flow_engaged_ts) }}</td>
+              <td>{{ ans.platform }}</td>
+              <td>{{ ans.channel }}</td>
+              <td>{{ ans.version }}</td>
+              <td>{{ ans.locale }}</td>
+              <td>{{ ans.profile_age }}</td>
+            </tr>
+          {% endfor %}
+        </table>
+
+        {{ page_links(request, sortby, answers, survey, surveys) }}
+      {% endif %}
+    </div>
+  </div>
+{% endblock %}

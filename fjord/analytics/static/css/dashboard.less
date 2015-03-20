@@ -80,12 +80,13 @@
 
   #feedback_search {
     position: absolute;
-    top: 15px;
     right: 15px;
+    top: 15px;
 
     .search_box {
       background: url('../img/search.png') no-repeat scroll 4px center transparent;
       padding-left: 16px;
+      width: 350px;
     }
   }
 }
@@ -229,12 +230,16 @@ ul.bars {
 
 .summarytable {
   display: block;
-  padding: 5px 40px;
+  padding: 5px;
   position: relative;
   width: 100%;
 
   th, td {
     padding: 4px 8px;
+
+    span.nowrap {
+      white-space: nowrap;
+    }
   }
 
   tbody {
@@ -244,6 +249,9 @@ ul.bars {
 
     tr:nth-child(odd) {
       background-color: #eef;
+    }
+    tr.test-answer {
+      background-color: #fdd;
     }
   }
 }
@@ -354,7 +362,7 @@ ul.bars {
 #whentext {
   margin-top: 5px;
   input[type=date] {
-    width: 75px;
+    width: 9em;
   }
 }
 
@@ -460,19 +468,6 @@ ul.bars {
   &.happy { background-position: 0 -30px; }
 }
 
-table.hb {
-  width: 100%;
-}
-
-table.hb th,
-table.hb td {
-  padding: 3px;
-}
-
-table.hb td {
-  border: 1px solid #ddd;
-}
-
 .pager {
   padding-top: 1em;
   padding-bottom: 1em;
@@ -482,6 +477,10 @@ table.hb td {
     // fixing this.
     margin-left: 10em;
   }
+}
+
+.inline-form {
+  display: inline-block;
 }
 
 table.flagged {
